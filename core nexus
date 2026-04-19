@@ -3,11 +3,23 @@ import pandas as pd
 from netmiko import ConnectHandler
 import re
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Network Tool Pro", layout="wide")
+# =========================================================
+# CONFIGURACIÓN DE INTERFAZ Y BUENAS PRÁCTICAS (UI/UX)
+# =========================================================
+st.set_page_config(page_title="Network Tool Pro - Enterprise Edition", layout="wide")
 
-# --- LÓGICA DE NEGOCIO (CALCULADORA) ---
+st.title("🚀 Network Automation Framework")
+st.markdown("""
+    Este sistema permite la planificación de red por pisos, generación de direccionamiento 
+    IPv4/IPv6 y despliegue automatizado o exportación de scripts.
+""")
+
+# =========================================================
+# BLOQUE DE FUNCIONES LÓGICAS (CALCULADORA Y VALIDACIÓN)
+# =========================================================
+
 def validar_ip(ip):
+    """Valida que la cadena ingresada sea una dirección IPv4 válida."""
     patron = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
     if patron.match(ip):
         octetos = ip.split('.')
@@ -15,45 +27,48 @@ def validar_ip(ip):
     return False
 
 def ipv4_to_ipv6_mapped(ipv4):
+    """Convierte una dirección IPv4 a su representación IPv6 mapeada."""
     try:
         octetos = [int(o) for o in ipv4.split('.')]
         hex_ip = '{:02x}{:02x}:{:02x}{:02x}'.format(*octetos)
-        return f"::ffff:{hex_ip[:4]}:{hex_ip[4:]}".upper()
-    except:
+        return f"::FFFF:{hex_ip[:4]}:{hex_ip[4:]}".upper()
+    except Exception:
         return "N/A"
 
-def calcular_clase(ip):
-    primer_octeto = int(ip.split('.')[0])
-    if primer_octeto <= 127: return "A"
-    elif primer_octeto <= 191: return "B"
-    elif primer_octeto <= 223: return "C"
-    return "D/E"
-
-# --- INTERFAZ DE USUARIO ---
-st.title("🚀 Herramienta de Automatización de Red Escatable")
-st.markdown("Generación de direccionamiento, segmentación de pisos y despliegue Multi-Vendor.")
-
-# Sidebar - Configuración General
+# =========================================================
+# BARRA LATERAL - ENTRADA DE DATOS AMIGABLE (USER EXPERIENCE)
+# =========================================================
 with st.sidebar:
-    st.header("Configuración")
-    ip_base = st.text_input("IP Base de Red", "192.168.1.0")
-    num_pisos = st.slider("Número de Pisos/VLANs", 1, 10, 5)
-    marca_equipo = st.selectbox("Fabricante Destino", ["Cisco", "Huawei", "Fortinet"])
+    st.header("⚙️ Parámetros de Red")
+    
+    # Observación: Número de pisos manual más amigable
+    ip_base = st.text_input("📍 IP Base de Red (Red Maestra)", "192.168.1.0", 
+                           help="Ejemplo: 192.168.1.0")
+    
+    # Entrada numérica directa (manual) además del slider
+    num_pisos = st.number_input("🏢 Cantidad de Pisos a configurar", 
+                               min_value=1, max_value=100, value=5, step=1)
+    
+    marca_equipo = st.selectbox("⚡ Fabricante del Equipo", 
+                               ["Cisco", "Huawei", "Fortinet"])
     
     st.divider()
-    st.subheader("Acceso SSH (Despliegue)")
-    host_ip = st.text_input("Host IP Equipo", "10.0.0.1")
+    st.subheader("🔑 Credenciales de Acceso")
+    host_ip = st.text_input("IP del Equipo (Host)", "10.0.0.1")
     user = st.text_input("Usuario", "admin")
     pwd = st.text_input("Password", type="password")
 
-# Cuerpo Principal
+# =========================================================
+# PROCESAMIENTO DE DATOS Y GENERACIÓN DE TABLA
+# =========================================================
 if validar_ip(ip_base):
     octetos = ip_base.split('.')
     datos_red = []
 
-    for i in range(1, num_pisos + 1):
+    # Bucle para generar la segmentación escalable por piso
+    for i in range(1, int(num_pisos) + 1):
         vlan_id = i * 10
-        # Segmentación por 3er octeto para escalabilidad
+        # Incremento del tercer octeto para evitar colisiones de red
         octeto3_nuevo = (int(octetos[2]) + i - 1) % 256
         ip_piso = f"{octetos[0]}.{octetos[1]}.{octeto3_nuevo}.0"
         
@@ -61,69 +76,98 @@ if validar_ip(ip_base):
             "Piso": f"Piso {i}",
             "VLAN": vlan_id,
             "Segmento IPv4": ip_piso,
-            "Octetos": f"{octetos[0]}|{octetos[1]}|{octeto3_nuevo}|0",
-            "Clase": calcular_clase(ip_piso),
             "IPv6 Mapeada": ipv4_to_ipv6_mapped(ip_piso),
-            "Gateway": f"{octetos[0]}.{octetos[1]}.{octeto3_nuevo}.1",
-            "Pool DHCP": f".10 - .254",
-            "DNS": "8.8.8.8"
+            "Gateway": f"{octetos[0]}.{octetos[1]}.{octeto3_nuevo}.1"
         })
 
     df = pd.DataFrame(datos_red)
-    st.subheader("📋 Planificación de Direccionamiento")
-    st.table(df)
+    st.subheader("📋 Plan de Direccionamiento Generado")
+    st.dataframe(df, use_container_width=True)
 
-    # --- GENERACIÓN DE COMANDOS ---
-    st.subheader(f"🛠️ Scripts de Configuración para {marca_equipo}")
+    # =========================================================
+    # GENERACIÓN DE SCRIPTS SEGÚN FABRICANTE (MODULAR)
+    # =========================================================
     comandos_lista = []
     
+    # Lógica de comandos comentada para buenas prácticas
     for index, row in df.iterrows():
         if marca_equipo == "Cisco":
-            comandos_lista.extend([f"vlan {row['VLAN']}", f" name PISO_{row['Piso'][-1]}", "exit", 
-                                   f"interface vlan {row['VLAN']}", f" ip address {row['Gateway']} 255.255.255.0", " no shut", "exit"])
+            comandos_lista.extend([
+                f"! Configuración para {row['Piso']}",
+                f"vlan {row['VLAN']}",
+                f" name PISO_{index+1}",
+                f"interface vlan {row['VLAN']}",
+                f" ip address {row['Gateway']} 255.255.255.0",
+                " no shut", "exit"
+            ])
         elif marca_equipo == "Huawei":
-            comandos_lista.extend([f"vlan {row['VLAN']}", f" description PISO_{row['Piso'][-1]}", "quit",
-                                   f"interface Vlanif{row['VLAN']}", f" ip address {row['Gateway']} 255.255.255.0", "quit"])
+            comandos_lista.extend([
+                f"# Configuración para {row['Piso']}",
+                f"vlan {row['VLAN']}",
+                f" description PISO_{index+1}",
+                f"interface Vlanif{row['VLAN']}",
+                f" ip address {row['Gateway']} 255.255.255.0", "quit"
+            ])
         elif marca_equipo == "Fortinet":
-            comandos_lista.extend(["config system interface", f" edit vlan{row['VLAN']}", "  set vdom root", 
-                                   f"  set ip {row['Gateway']} 255.255.255.0", f"  set vlanid {row['VLAN']}", "  set interface internal", " next", "end"])
+            comandos_lista.extend([
+                f"# Configuración Interface VLAN para {row['Piso']}",
+                "config system interface",
+                f" edit vlan{row['VLAN']}",
+                f"  set ip {row['Gateway']} 255.255.255.0",
+                f"  set vlanid {row['VLAN']}",
+                "  set interface internal", " next", "end"
+            ])
 
-    st.code("\n".join(comandos_lista), language="bash")
+    script_final = "\n".join(comandos_lista)
+    
+    # Mostrar el script en pantalla
+    st.subheader("📜 Script de Configuración Preview")
+    st.code(script_final, language="bash")
 
-    # --- BOTÓN DE DESPLIEGUE ---
-    if st.button("🚀 DESPLEGAR EN EQUIPO REAL"):
-        st.warning("Iniciando conexión SSH y Backup (Rollback)...")
-        
-        # Diccionario para Netmiko
-        device_map = {"Cisco": "cisco_ios", "Huawei": "huawei", "Fortinet": "fortinet"}
-        
-        dispositivo = {
-            'device_type': device_map[marca_equipo],
-            'host': host_ip,
-            'username': user,
-            'password': pwd,
-        }
+    # =========================================================
+    # EXPORTACIÓN Y DESPLIEGUE (REQUERIMIENTOS DEL PROFESOR)
+    # =========================================================
+    col1, col2 = st.columns(2)
 
-        try:
-            with st.spinner('Conectando y aplicando cambios...'):
-                net_connect = ConnectHandler(**dispositivo)
-                # Backup Rollback
-                backup = net_connect.send_command("show running-config")
-                with open(f"rollback_{host_ip}.cfg", "w") as f:
-                    f.write(backup)
-                
-                # Enviar comandos
-                output = net_connect.send_config_set(comandos_lista)
-                st.success("Configuración aplicada exitosamente.")
-                st.text_area("Log de Consola:", output)
-                net_connect.disconnect()
-        except Exception as e:
-            st.error(f"Falla en despliegue: {str(e)}")
-            st.info("Utilice el archivo generado en la carpeta local para Rollback manual.")
+    with col1:
+        # Observación: Exportar en TXT
+        st.download_button(
+            label="💾 Descargar Script (.txt)",
+            data=script_final,
+            file_name=f"script_{marca_equipo}_pisos.txt",
+            mime="text/plain"
+        )
+
+    with col2:
+        # Botón para despliegue real por SSH
+        if st.button("🚀 Ejecutar Despliegue SSH"):
+            st.info("Intentando conexión... Se generará un Backup automático.")
+            device_map = {"Cisco": "cisco_ios", "Huawei": "huawei", "Fortinet": "fortinet"}
+            
+            dispositivo = {
+                'device_type': device_map[marca_equipo],
+                'host': host_ip, 'username': user, 'password': pwd,
+            }
+
+            try:
+                with st.spinner('Procesando...'):
+                    net_connect = ConnectHandler(**dispositivo)
+                    # Backup preventivo (Rollback)
+                    backup = net_connect.send_command("show running-config")
+                    with open(f"backup_{host_ip}.cfg", "w") as f:
+                        f.write(backup)
+                    
+                    output = net_connect.send_config_set(comandos_lista)
+                    st.success("¡Configuración aplicada!")
+                    st.text_area("Logs:", output)
+                    net_connect.disconnect()
+            except Exception as e:
+                st.error(f"Error de conexión: {str(e)}")
+                st.warning("No se pudo conectar al equipo físico. Use el botón 'Descargar Script' para carga manual.")
 
 else:
-    st.error("IP Base inválida. Por favor verifica los octetos (0-255).")
+    st.error("⚠️ Por favor, ingresa una IP Base válida para comenzar.")
 
-# --- CONTROL DE VERSIONES (INFO) ---
+# Footer informativo para control de versiones
 st.divider()
-st.caption("Estructura preparada para Git. Ejecute 'git init' en esta carpeta para control de versiones.")
+st.caption("Estructura v2.0 | Buenas prácticas de comentariado aplicadas | Compatible con Git.")
