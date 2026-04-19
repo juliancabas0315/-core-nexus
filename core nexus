@@ -1,13 +1,12 @@
 import streamlit as st
 import pandas as pd
-from netmiko import ConnectHandler
 import re
 import io
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="Network Tool Pro v4", layout="wide", page_icon="⚙️")
+st.set_page_config(page_title="Network Tool Ultra V5", layout="wide", page_icon="📡")
 
-# --- LÓGICA DE NEGOCIO / FUNCIONES ---
+# --- FUNCIONES DE CONVERSIÓN Y LÓGICA ---
 
 def validar_ip(ip):
     patron = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
@@ -16,126 +15,116 @@ def validar_ip(ip):
         return all(0 <= int(o) <= 255 for o in octetos)
     return False
 
-def generar_scripts_completos(vendor, df_pisos):
-    """
-    Genera bloques completos de comandos incluyendo entrada a modo config 
-    y salida con guardado de cambios.
-    """
+def ipv4_to_ipv6_mapped(ipv4):
+    """Convierte IPv4 a formato IPv6 Mapped (::ffff:xxxx:xxxx)."""
+    try:
+        octetos = [int(o) for o in ipv4.split('.')]
+        hex_ip = '{:02x}{:02x}:{:02x}{:02x}'.format(*octetos)
+        return f"::ffff:{hex_ip[:4]}:{hex_ip[4:]}".upper()
+    except:
+        return "Error"
+
+def generar_scripts_completos(vendor, df_pisos, wifi_cfg):
     deploy = []
     rollback = []
 
+    # --- LÓGICA CORE VENDORS (CISCO/HUAWEI/FORTINET) ---
     if vendor == "Cisco":
         deploy.extend(["enable", "configure terminal"])
         rollback.extend(["enable", "configure terminal"])
-        
         for _, row in df_pisos.iterrows():
-            v, n, g = row['VLAN'], row['Nombre'], row['Gateway']
-            # Deploy
-            deploy.extend([f"vlan {v}", f" name {n}", " exit", 
-                           f"interface vlan {v}", f" ip address {g} 255.255.255.0", " no shut", " exit"])
-            # Rollback
+            v, n, g4, g6 = row['VLAN'], row['Nombre'], row['Gateway IPv4'], row['Gateway IPv6']
+            deploy.extend([f"vlan {v}", f" name {n}", " exit", f"interface vlan {v}", 
+                           f" ip address {g4} 255.255.255.0", f" ipv6 address {g6}/96", " no shut", " exit"])
             rollback.extend([f"no interface vlan {v}", f"no vlan {v}"])
-            
         deploy.extend(["end", "write memory"])
-        rollback.extend(["end", "write memory"])
 
     elif vendor == "Huawei":
-        deploy.extend(["system-view"])
+        deploy.extend(["system-view", "ipv6"])
         rollback.extend(["system-view"])
-        
         for _, row in df_pisos.iterrows():
-            v, n, g = row['VLAN'], row['Nombre'], row['Gateway']
-            # Deploy
-            deploy.extend([f"vlan {v}", f" description {n}", " quit",
-                           f"interface Vlanif{v}", f" ip address {g} 255.255.255.0", " quit"])
-            # Rollback
+            v, n, g4, g6 = row['VLAN'], row['Nombre'], row['Gateway IPv4'], row['Gateway IPv6']
+            deploy.extend([f"vlan {v}", f" description {n}", " quit", f"interface Vlanif{v}", 
+                           f" ip address {g4} 255.255.255.0", f" ipv6 address {g6} 96", " quit"])
             rollback.extend([f"undo interface Vlanif{v}", f"undo vlan {v}"])
-            
-        deploy.extend(["return", "save", "y"]) # 'y' para confirmar el save
-        rollback.extend(["return", "save", "y"])
+        deploy.extend(["return", "save", "y"])
 
-    elif vendor == "Fortinet":
-        # Fortinet usa bloques indentados
-        deploy.append("config system interface")
-        rollback.append("config system interface")
-        
-        for _, row in df_pisos.iterrows():
-            v, n, g = row['VLAN'], row['Nombre'], row['Gateway']
-            # Deploy
-            deploy.extend([f"    edit vlan{v}", f"        set vdom root", f"        set ip {g} 255.255.255.0", 
-                           f"        set vlanid {v}", f"        set interface internal", "    next"])
-            # Rollback
-            rollback.extend([f"    delete vlan{v}"])
-            
-        deploy.append("end")
-        rollback.append("end")
-        
-    return deploy, rollback
+    # --- LÓGICA TPLINK ARCHER A200 (LAN/WIFI) ---
+    tp_script = [
+        "### CONFIGURACIÓN TPLINK ARCHER A200 ###",
+        f"1. Acceder a http://tplinkwifi.net (Login: {wifi_cfg['user']})",
+        f"2. Quick Setup -> Wireless Settings:",
+        f"   - SSID (2.4G/5G): {wifi_cfg['ssid']}",
+        f"   - Security: WPA2-PSK (AES)",
+        f"   - Password: {wifi_cfg['pass']}",
+        f"3. Advanced -> Network -> LAN:",
+        f"   - IP Address: {df_pisos.iloc[0]['Gateway IPv4']}",
+        f"   - Subnet Mask: 255.255.255.0",
+        f"4. DHCP Server Settings:",
+        f"   - Start IP: .10 | End IP: .250",
+        f"   - Default Gateway: {df_pisos.iloc[0]['Gateway IPv4']}",
+        "5. Save & Reboot."
+    ]
+
+    return deploy, rollback, tp_script
 
 # --- INTERFAZ DE USUARIO ---
-
-st.title("🚀 Network Automation Pro - Full Script Mode")
-st.markdown("Generación de scripts completos con **modos de configuración** y **rollback**.")
+st.title("📡 Network Tool Ultra V5 - IPv4/IPv6 & TPLINK")
 
 with st.sidebar:
-    st.header("⚙️ Configuración")
-    ip_base = st.text_input("IP Base (Red)", "192.168.1.0")
-    marca_equipo = st.selectbox("Fabricante", ["Cisco", "Huawei", "Fortinet"])
+    st.header("⚙️ Parámetros de Red")
+    ip_base = st.text_input("IP Base IPv4", "192.168.1.0")
+    marca_equipo = st.selectbox("Switch/Router Core", ["Cisco", "Huawei", "Fortinet"])
     
     st.divider()
-    st.subheader("🔑 Acceso SSH")
-    host_ip = st.text_input("IP Host", "10.0.0.1")
-    user = st.text_input("User", "admin")
-    pwd = st.text_input("Pass", type="password")
+    st.subheader("📶 Configuración WiFi (TPLINK)")
+    wifi_ssid = st.text_input("SSID (Nombre WiFi)", "SKULL_BIKER_WIFI")
+    wifi_pass = st.text_input("Contraseña WiFi", "Calavera2026", type="password")
+    wifi_user = st.text_input("Admin AP", "admin")
 
 if validar_ip(ip_base):
-    st.subheader("🏢 Detalle de Segmentos")
-    num_pisos = st.number_input("Cantidad de Pisos:", 1, 50, 2)
+    st.subheader("🏢 Planificación de Direccionamiento Dual-Stack")
+    num_pisos = st.number_input("Cantidad de Segmentos:", 1, 20, 2)
     
     datos = []
     octs = ip_base.split('.')
     for i in range(num_pisos):
-        with st.expander(f"Piso {i+1}", expanded=True):
+        with st.expander(f"Configuración Segmento {i+1}", expanded=(i==0)):
             c1, c2 = st.columns(2)
             with c1:
-                nom = st.text_input("Nombre", f"PISO_{i+1}", key=f"n{i}")
+                nom = st.text_input("Nombre", f"DATA_PISO_{i+1}", key=f"n{i}")
             with c2:
-                vlan = st.number_input("VLAN", 1, 4094, (i+1)*10, key=f"v{i}")
-            gw = f"{octs[0]}.{octs[1]}.{(int(octs[2])+i)%256}.1"
-            datos.append({"Nombre": nom, "VLAN": vlan, "Gateway": gw})
+                vlan = st.number_input("VLAN ID", 1, 4094, (i+1)*10, key=f"v{i}")
+            
+            ipv4_gw = f"{octs[0]}.{octs[1]}.{(int(octs[2])+i)%256}.1"
+            ipv6_gw = ipv4_to_ipv6_mapped(ipv4_gw)
+            
+            st.write(f"🌐 **IPv4:** {ipv4_gw} | 🌐 **IPv6:** {ipv6_gw}")
+            datos.append({"Nombre": nom, "VLAN": vlan, "Gateway IPv4": ipv4_gw, "Gateway IPv6": ipv6_gw})
 
     df = pd.DataFrame(datos)
     st.table(df)
 
-    # Generación de scripts finales
-    script_deploy, script_rollback = generar_scripts_completos(marca_equipo, df)
+    # Generación de Scripts
+    wifi_cfg = {"ssid": wifi_ssid, "pass": wifi_pass, "user": wifi_user}
+    deploy, rollback, tplink = generar_scripts_completos(marca_equipo, df, wifi_cfg)
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.success("📝 Script de Despliegue")
-        st.code("\n".join(script_deploy), language="bash")
-    with col2:
-        st.warning("⏪ Script de Rollback")
-        st.code("\n".join(script_rollback), language="bash")
-
-    # --- EXPORTACIÓN ---
-    txt_content = f"### SCRIPT PARA {marca_equipo} ###\n\n"
-    txt_content += "--- DESPLIEGUE ---\n" + "\n".join(script_deploy)
-    txt_content += "\n\n--- ROLLBACK ---\n" + "\n".join(script_rollback)
+    # Visualización
+    tab1, tab2, tab3 = st.tabs(["🚀 Despliegue Core", "⏪ Rollback", "📶 TPLINK A200"])
     
-    st.download_button("💾 Descargar todo en TXT", txt_content, file_name=f"Config_{marca_equipo}.txt")
+    with tab1:
+        st.code("\n".join(deploy), language="bash")
+    with tab2:
+        st.code("\n".join(rollback), language="bash")
+    with tab3:
+        for line in tplink: st.write(line)
 
-    # --- EJECUCIÓN ---
-    if st.button("🚀 APLICAR CAMBIOS EN VIVO"):
-        try:
-            device_map = {"Cisco": "cisco_ios", "Huawei": "huawei", "Fortinet": "fortinet"}
-            with st.spinner("Conectando..."):
-                conn = ConnectHandler(device_type=device_map[marca_equipo], host=host_ip, username=user, password=pwd)
-                # Notar que enviamos la lista completa
-                out = conn.send_config_set(script_deploy)
-                st.text_area("Resultado:", out)
-                conn.disconnect()
-        except Exception as e:
-            st.error(f"Error: {e}")
+    # Exportación
+    txt_final = f"PROYECTO: {wifi_ssid}\n" + "="*30 + "\n\n"
+    txt_final += "--- CORE DE RED ---\n" + "\n".join(deploy) + "\n\n"
+    txt_final += "--- GUIA TPLINK ---\n" + "\n".join(tplink)
+    
+    st.download_button("💾 Exportar Configuración Completa", txt_final, file_name="Proyecto_Red_Total.txt")
+
 else:
-    st.error("IP inválida.")
+    st.error("IP Base no válida.")
