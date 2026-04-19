@@ -1,70 +1,88 @@
-import ipaddress
 from netmiko import ConnectHandler
+import json
 
-class NetworkManager:
-    def __init__(self, ip_base, num_pisos):
-        self.ip_base = ipaddress.IPv4Interface(ip_base)
-        self.num_pisos = num_pisos
-        self.config_log = [] # Para Rollback
+# 1. BLOQUE DE DEFINICIÓN DE DISPOSITIVOS (Escalabilidad)
+# Aquí configuras los parámetros de acceso. 
+# El 'device_type' de Netmiko detecta si es cisco_ios, huawei, o fortinet.
+dispositivos = [
+    {
+        "device_type": "cisco_ios",
+        "host": "192.168.1.1",
+        "username": "admin",
+        "password": "password123",
+        "secret": "enable_pass",
+        "marca": "Cisco"
+    },
+    {
+        "device_type": "fortinet",
+        "host": "192.168.1.2",
+        "username": "admin",
+        "password": "password123",
+        "marca": "Fortinet"
+    }
+]
 
-    def generar_segmentacion(self):
-        """Calcula la red para cada piso de forma dinámica"""
-        segmentos = []
-        for i in range(1, self.num_pisos + 1):
-            # Creamos subredes basadas en el piso (ej. 192.168.10.0, 20.0...)
-            red_piso = f"{self.ip_base.ip + (i * 256)}" # Lógica simple de salto
-            segmentos.append({
-                "piso": i,
-                "vlan": i * 10,
-                "red": red_piso,
-                "gateway": f"{red_piso[:-1]}1"
-            })
-        return segmentos
+# 2. BLOQUE DE GENERACIÓN DE COMANDOS (Adaptativo)
+def generar_configuracion(piso, vlan_id, ip_base, marca):
+    """
+    Crea los comandos específicos según la marca del equipo.
+    """
+    if marca == "Cisco":
+        return [
+            f"vlan {vlan_id}",
+            f"name PISO_{piso}",
+            f"interface vlan {vlan_id}",
+            f"ip address {ip_base} 255.255.255.0",
+            "no shutdown"
+        ]
+    elif marca == "Huawei":
+        return [
+            f"vlan {vlan_id}",
+            f"description PISO_{piso}",
+            f"interface Vlanif{vlan_id}",
+            f"ip address {ip_base} 255.255.255.0"
+        ]
+    elif marca == "Fortinet":
+        return [
+            f"config system interface",
+            f"edit vlan{vlan_id}",
+            f"set vdom root",
+            f"set ip {ip_base} 255.255.255.0",
+            f"set interface internal",
+            f"set vlanid {vlan_id}",
+            "next",
+            "end"
+        ]
 
-    def push_config(self, device_data, comandos):
-        """Envia la configuración con manejo de errores (Rollback)"""
+# 3. BLOQUE DE EJECUCIÓN Y ROLLBACK
+def aplicar_configuracion(num_pisos):
+    for equipo in dispositivos:
+        print(f"--- Conectando a {equipo['marca']} ({equipo['host']}) ---")
         try:
-            with ConnectHandler(**device_data) as net_connect:
-                net_connect.enable()
-                output = net_connect.send_config_set(comandos)
-                print(f"✅ Éxito en {device_data['host']}")
-                return True
+            net_connect = ConnectHandler(**{k: v for k, v in equipo.items() if k != 'marca'})
+            net_connect.enable()
+            
+            # Crear respaldo antes de cambiar (Rollback manual simple)
+            backup = net_connect.send_command("show running-config")
+            with open(f"backup_{equipo['host']}.cfg", "w") as f:
+                f.write(backup)
+
+            for p in range(1, num_pisos + 1):
+                vlan = p * 10
+                ip = f"192.168.{vlan}.1"
+                comandos = generar_configuracion(p, vlan, ip, equipo['marca'])
+                
+                print(f"Aplicando VLAN {vlan} para Piso {p}...")
+                net_connect.send_config_set(comandos)
+            
+            net_connect.save_config()
+            net_connect.disconnect()
+            print("Configuración exitosa.")
+
         except Exception as e:
-            print(f"❌ ERROR en {device_data['host']}: {e}")
-            self.ejecutar_rollback(device_data)
-            return False
+            print(f"ERROR en {equipo['host']}: {e}")
+            print("Iniciando ROLLBACK: Por favor restaure el archivo de backup generado.")
 
-    def ejecutar_rollback(self, device_data):
-        """Lógica para revertir cambios en caso de falla"""
-        print(f"⚠️ Iniciando Rollback preventivo en {device_data['host']}...")
-        # Aquí podrías cargar un 'checkpoint' previo o comandos 'no vlan X'
-        pass
-
-# --- BLOQUE DE PLANTILLAS POR MARCA ---
-def get_commands(marca, vlan, gateway):
-    templates = {
-        "cisco_ios": [f"vlan {vlan}", f"name PISO_{vlan//10}", "exit"],
-        "huawei": [f"vlan {vlan}", "quit", f"interface Vlanif {vlan}"],
-        "fortinet": [f"config system interface", f"edit vlan{vlan}", "set vdom root"]
-    }
-    return templates.get(marca, [])
-
-# --- EJECUCIÓN PRINCIPAL ---
-if __name__ == "__main__":
-    pisos = int(input("¿Cuántos pisos deseas configurar? "))
-    ip_init = "192.168.0.0/24"
-    
-    manager = NetworkManager(ip_init, pisos)
-    plan = manager.generar_segmentacion()
-
-    # Ejemplo de Host a configurar
-    mi_switch = {
-        'device_type': 'cisco_ios', # Cambiar a 'huawei' o 'fortinet' según sea el caso
-        'host': '10.0.0.5',
-        'username': 'admin',
-        'password': 'password123',
-    }
-
-    for p in plan:
-        cmds = get_commands(mi_switch['device_type'], p['vlan'], p['gateway'])
-        manager.push_config(mi_switch, cmds)
+# EJECUCIÓN: Usuario elige cantidad de pisos
+cantidad = int(input("¿Cuántos pisos desea configurar? "))
+aplicar_configuracion(cantidad)
