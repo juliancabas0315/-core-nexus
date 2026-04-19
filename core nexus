@@ -1,9 +1,5 @@
 import streamlit as st
 import pandas as pd
-import io
-import subprocess
-import platform
-from netmiko import ConnectHandler
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
@@ -22,53 +18,122 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
+# --- CONSTANTES ---
+VLAN_ID_MIN   = 100
+VLAN_ID_MAX   = 4000
+SEGMENTOS_MAX = 15
+DNS_PRIMARIO  = "8.8.8.8"
+SUBNET_MASK   = "255.255.255.0"
+
 # --- FUNCIONES TÉCNICAS ---
 
-def ping_test(ip):
-    """Realiza un ping de diagnóstico según el SO."""
-    param = '-n' if platform.system().lower() == 'windows' else '-c'
-    command = ['ping', param, '1', ip]
-    return subprocess.call(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL) == 0
+def conv_ipv4_to_ipv6(ipv4: str) -> str:
+    """
+    Genera una dirección IPv6 estandarizada para infraestructura
+    a partir de una dirección IPv4.
 
-def conv_ipv4_to_ipv6(ipv4):
-    """Genera IPv6 estandarizada para infraestructura."""
+    Args:
+        ipv4: Dirección IPv4 en formato string (ej: "192.168.10.1")
+
+    Returns:
+        Dirección IPv6 en formato string (ej: "2001:db8:300:10::1/64")
+    """
     p = ipv4.split('.')
     return f"2001:db8:300:{p[2]}::{p[3]}/64"
 
-def generar_config_full(vendor, datos, host):
-    """Motor de generación de scripts para Cisco, Huawei y Fortinet."""
+
+def generar_config_full(vendor: str, datos: pd.DataFrame, host: str) -> tuple:
+    """
+    Genera los scripts de configuración y rollback para un equipo de red.
+
+    Args:
+        vendor: Fabricante del equipo. Valores: "Cisco", "Huawei", "Fortinet"
+        datos:  DataFrame con columnas VLAN, Nombre, IPv4, IPv6
+        host:   Hostname que se asignará al equipo
+
+    Returns:
+        deploy:   Lista de comandos CLI para aplicar la configuración
+        rollback: Lista de comandos CLI para revertir los cambios
+    """
     dep, rb = [], []
-    
+
     if vendor == "Cisco":
-        dep.extend(["enable", "configure terminal", f"hostname {host}", "ip dhcp excluded-address 192.168.0.1 192.168.0.10"])
+        dep.extend([
+            "enable",
+            "configure terminal",
+            f"hostname {host}",
+            "ip dhcp excluded-address 192.168.0.1 192.168.0.10"
+        ])
         for _, r in datos.iterrows():
-            dep.extend([f"vlan {r['VLAN']}", f" name {r['Nombre']}", " exit",
-                        f"interface vlan {r['VLAN']}", f" ip address {r['IPv4']} 255.255.255.0",
-                        f" ipv6 address {r['IPv6'].split('/')[0]}/64", " no shut", " exit",
-                        f"ip dhcp pool POOL_{r['VLAN']}", f" network {r['IPv4'][:-1]}0 255.255.255.0",
-                        f" default-router {r['IPv4']}", " dns-server 8.8.8.8", " exit"])
-            rb.extend([f"no ip dhcp pool POOL_{r['VLAN']}", f"no interface vlan {r['VLAN']}"])
+            dep.extend([
+                f"vlan {r['VLAN']}",
+                f" name {r['Nombre']}",
+                " exit",
+                f"interface vlan {r['VLAN']}",
+                f" ip address {r['IPv4']} {SUBNET_MASK}",
+                f" ipv6 address {r['IPv6'].split('/')[0]}/64",
+                " no shut",
+                " exit",
+                f"ip dhcp pool POOL_{r['VLAN']}",
+                f" network {r['IPv4'][:-1]}0 {SUBNET_MASK}",
+                f" default-router {r['IPv4']}",
+                f" dns-server {DNS_PRIMARIO}",
+                " exit"
+            ])
+            rb.extend([
+                f"no ip dhcp pool POOL_{r['VLAN']}",
+                f"no interface vlan {r['VLAN']}"
+            ])
         dep.extend(["end", "write memory"])
 
     elif vendor == "Huawei":
-        dep.extend(["system-view", f"sysname {host}", "ipv6", "dhcp enable"])
+        dep.extend([
+            "system-view",
+            f"sysname {host}",
+            "ipv6",
+            "dhcp enable"
+        ])
         for _, r in datos.iterrows():
-            dep.extend([f"vlan {r['VLAN']}", f" description {r['Nombre']}", " quit",
-                        f"interface Vlanif{r['VLAN']}", f" ip address {r['IPv4']} 255.255.255.0",
-                        f" ipv6 address {r['IPv6'].replace('/64', ' 64')}", " dhcp select interface", " quit"])
-            rb.extend([f"undo interface Vlanif{r['VLAN']}", f"undo vlan {r['VLAN']}"])
+            dep.extend([
+                f"vlan {r['VLAN']}",
+                f" description {r['Nombre']}",
+                " quit",
+                f"interface Vlanif{r['VLAN']}",
+                f" ip address {r['IPv4']} {SUBNET_MASK}",
+                f" ipv6 address {r['IPv6'].replace('/64', ' 64')}",
+                " dhcp select interface",
+                " quit"
+            ])
+            rb.extend([
+                f"undo interface Vlanif{r['VLAN']}",
+                f"undo vlan {r['VLAN']}"
+            ])
         dep.extend(["return", "save", "y"])
 
     elif vendor == "Fortinet":
-        dep.extend(["config system global", f"    set hostname {host}", "end", "config system interface"])
+        dep.extend([
+            "config system global",
+            f"    set hostname {host}",
+            "end",
+            "config system interface"
+        ])
         for _, r in datos.iterrows():
-            dep.extend([f"    edit vlan{r['VLAN']}", f"        set vdom root", f"        set ip {r['IPv4']} 255.255.255.0",
-                        f"        set vlanid {r['VLAN']}", f"        set interface internal", "        config ipv6",
-                        f"            set ip6-address {r['IPv6']}", "        end", "    next"])
+            dep.extend([
+                f"    edit vlan{r['VLAN']}",
+                f"        set vdom root",
+                f"        set ip {r['IPv4']} {SUBNET_MASK}",
+                f"        set vlanid {r['VLAN']}",
+                f"        set interface internal",
+                "        config ipv6",
+                f"            set ip6-address {r['IPv6']}",
+                "        end",
+                "    next"
+            ])
             rb.append(f"    delete vlan{r['VLAN']}")
         dep.append("end")
-        
+
     return dep, rb
+
 
 # --- INTERFAZ CORE-NEXUS ---
 st.title("🛡️ CORE-NEXUS: Enterprise Network Engine")
@@ -76,40 +141,34 @@ st.caption("Sistema de Automatización de Redes e Infraestructura de Telecomunic
 
 with st.sidebar:
     st.header("⚙️ Configuración Maestro")
-    proyecto = st.text_input("Nombre del Proyecto", "FIBERTEC_OP_2026")
-    vendor = st.selectbox("Fabricante Core", ["Cisco", "Huawei", "Fortinet"])
-    ip_base = st.text_input("Segmento Base IPv4", "192.168.10.0")
-    
-    st.divider()
-    st.subheader("🚀 Credenciales SSH")
-    target_ip = st.text_input("IP de Gestión Equipo", placeholder="10.0.0.1")
-    user = st.text_input("Usuario SSH", "admin")
-    pwd = st.text_input("Password SSH", type="password")
+    proyecto  = st.text_input("Nombre del Proyecto", "FIBERTEC_OP_2026")
+    vendor    = st.selectbox("Fabricante Core", ["Cisco", "Huawei", "Fortinet"])
+    ip_base   = st.text_input("Segmento Base IPv4", "192.168.10.0")
 
 if ip_base:
     # Controles de diseño
     c_a, c_b, c_c = st.columns(3)
-    num_pisos = c_a.number_input("N° de Segmentos", 1, 15, 2)
-    host_name = c_b.text_input("Hostname Equipo", "CORE-SW-01")
-    vlan_start = c_c.number_input("VLAN ID Inicial", 100, 4000, 100, step=10)
+    num_pisos  = c_a.number_input("N° de Segmentos",  1, SEGMENTOS_MAX, 2)
+    host_name  = c_b.text_input("Hostname Equipo", "CORE-SW-01")
+    vlan_start = c_c.number_input("VLAN ID Inicial", VLAN_ID_MIN, VLAN_ID_MAX, 100, step=10)
 
     # Cálculo de Redes
-    octs = ip_base.split('.')
+    octs     = ip_base.split('.')
     red_data = []
     for i in range(num_pisos):
         gw = f"{octs[0]}.{octs[1]}.{int(octs[2])+i}.1"
         red_data.append({
-            "Piso": f"Segmento {i+1}",
-            "Nombre": f"VLAN_{vlan_start + (i*10)}",
-            "VLAN": vlan_start + (i*10),
-            "IPv4 (Gateway)": gw,
-            "IPv6 (Gateway)": conv_ipv4_to_ipv6(gw)
+            "Piso":           f"Segmento {i+1}",
+            "Nombre":         f"VLAN_{vlan_start + (i*10)}",
+            "VLAN":            vlan_start + (i*10),
+            "IPv4 (Gateway)":  gw,
+            "IPv6 (Gateway)":  conv_ipv4_to_ipv6(gw)
         })
     df_red = pd.DataFrame(red_data)
 
     # --- MÉTRICAS DE GATEWAYS ---
     st.subheader("🌐 Gateways de Red Detectados")
-    cols_gw = st.columns(min(len(red_data), 4)) # Máximo 4 métricas por fila visual
+    cols_gw = st.columns(min(len(red_data), 4))
     for idx, r in enumerate(red_data):
         with cols_gw[idx % 4]:
             st.metric(f"GW {r['Piso']}", r['IPv4 (Gateway)'])
@@ -117,63 +176,30 @@ if ip_base:
     st.table(df_red)
 
     # Generación de Scripts
-    deploy, rollback = generar_config_full(vendor, df_red.rename(columns={"IPv4 (Gateway)": "IPv4", "IPv6 (Gateway)": "IPv6"}), host_name)
+    deploy, rollback = generar_config_full(
+        vendor,
+        df_red.rename(columns={"IPv4 (Gateway)": "IPv4", "IPv6 (Gateway)": "IPv6"}),
+        host_name
+    )
 
-    # PANEL DE TRABAJO (TABS)
-    t1, t2, t3, t4 = st.tabs(["📄 Script Config", "⏪ Rollback", "📶 TP-LINK A200", "🔥 DESPLIEGUE & DIAGNÓSTICO"])
+    # PANEL DE TRABAJO (solo 2 tabs)
+    t1, t2 = st.tabs(["📄 Script Config", "⏪ Rollback"])
 
     with t1:
         st.info(f"Comandos generados para arquitectura {vendor}")
         st.code("\n".join(deploy), language="bash")
-    
+
     with t2:
         st.warning("Use estos comandos para revertir los cambios en el Core.")
         st.code("\n".join(rollback), language="bash")
 
-    with t3:
-        st.subheader("🛠️ Configuración TP-Link Archer A200")
-        st.markdown(f"""
-        1. **Modo:** Cambiar a **Access Point Mode** (`Advanced > Operation Mode`).
-        2. **LAN IP:** `{red_data[0]['IPv4 (Gateway)']}`.
-        3. **SSID:** `{proyecto}_WiFi`.
-        4. **Seguridad:** WPA2-PSK (AES).
-        5. **DHCP:** Desactivar (El Core Nexus gestiona los Pools).
-        """)
-
-    with t4:
-        st.subheader("🚀 Despliegue en Hardware Físico")
-        cd1, cd2 = st.columns(2)
-        
-        if cd1.button("⚡ INICIAR PUSH CONFIG (SSH)"):
-            if not target_ip or not pwd:
-                st.error("Error: Se requiere IP y Password para conexión SSH.")
-            else:
-                try:
-                    dev_map = {"Cisco": "cisco_ios", "Huawei": "huawei", "Fortinet": "fortinet"}
-                    device = {'device_type': dev_map[vendor], 'host': target_ip, 'username': user, 'password': pwd, 'secret': pwd}
-                    
-                    with st.spinner("Estableciendo conexión y enviando comandos..."):
-                        conn = ConnectHandler(**device)
-                        if vendor == "Cisco": conn.enable()
-                        output = conn.send_config_set(deploy)
-                        st.success("✅ Configuración aplicada.")
-                        st.text_area("Log de Consola:", output, height=250)
-                        conn.disconnect()
-                except Exception as e:
-                    st.error(f"Falla en despliegue: {e}")
-
-        if cd2.button("🔍 VERIFICAR CONECTIVIDAD (PING)"):
-            st.info("Iniciando pruebas de ping a Gateways...")
-            for r in red_data:
-                ip = r['IPv4 (Gateway)']
-                if ping_test(ip):
-                    st.success(f"✅ {ip} - Activo")
-                else:
-                    st.error(f"❌ {ip} - Sin respuesta")
-
     # Botón de Descarga
     rep_final = f"CORE-NEXUS REPORT: {proyecto}\n" + "="*40 + "\n" + "\n".join(deploy)
-    st.download_button("💾 Guardar Reporte Final", rep_final, file_name=f"Config_{proyecto}.txt")
+    st.download_button(
+        "💾 Guardar Reporte Final",
+        rep_final,
+        file_name=f"Config_{proyecto}.txt"
+    )
 
 else:
     st.warning("Por favor, ingrese un segmento base de red para comenzar.")
