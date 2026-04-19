@@ -1,173 +1,52 @@
-import streamlit as st
-import pandas as pd
-from netmiko import ConnectHandler
-import re
+import ipaddress
 
-# =========================================================
-# CONFIGURACIÓN DE INTERFAZ Y BUENAS PRÁCTICAS (UI/UX)
-# =========================================================
-st.set_page_config(page_title="Network Tool Pro - Enterprise Edition", layout="wide")
-
-st.title("🚀 Network Automation Framework")
-st.markdown("""
-    Este sistema permite la planificación de red por pisos, generación de direccionamiento 
-    IPv4/IPv6 y despliegue automatizado o exportación de scripts.
-""")
-
-# =========================================================
-# BLOQUE DE FUNCIONES LÓGICAS (CALCULADORA Y VALIDACIÓN)
-# =========================================================
-
-def validar_ip(ip):
-    """Valida que la cadena ingresada sea una dirección IPv4 válida."""
-    patron = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
-    if patron.match(ip):
-        octetos = ip.split('.')
-        return all(0 <= int(o) <= 255 for o in octetos)
-    return False
-
-def ipv4_to_ipv6_mapped(ipv4):
-    """Convierte una dirección IPv4 a su representación IPv6 mapeada."""
+def generar_herramienta_red(ip_base_str):
     try:
-        octetos = [int(o) for o in ipv4.split('.')]
-        hex_ip = '{:02x}{:02x}:{:02x}{:02x}'.format(*octetos)
-        return f"::FFFF:{hex_ip[:4]}:{hex_ip[4:]}".upper()
-    except Exception:
-        return "N/A"
-
-# =========================================================
-# BARRA LATERAL - ENTRADA DE DATOS AMIGABLE (USER EXPERIENCE)
-# =========================================================
-with st.sidebar:
-    st.header("⚙️ Parámetros de Red")
-    
-    # Observación: Número de pisos manual más amigable
-    ip_base = st.text_input("📍 IP Base de Red (Red Maestra)", "192.168.1.0", 
-                           help="Ejemplo: 192.168.1.0")
-    
-    # Entrada numérica directa (manual) además del slider
-    num_pisos = st.number_input("🏢 Cantidad de Pisos a configurar", 
-                               min_value=1, max_value=100, value=5, step=1)
-    
-    marca_equipo = st.selectbox("⚡ Fabricante del Equipo", 
-                               ["Cisco", "Huawei", "Fortinet"])
-    
-    st.divider()
-    st.subheader("🔑 Credenciales de Acceso")
-    host_ip = st.text_input("IP del Equipo (Host)", "10.0.0.1")
-    user = st.text_input("Usuario", "admin")
-    pwd = st.text_input("Password", type="password")
-
-# =========================================================
-# PROCESAMIENTO DE DATOS Y GENERACIÓN DE TABLA
-# =========================================================
-if validar_ip(ip_base):
-    octetos = ip_base.split('.')
-    datos_red = []
-
-    # Bucle para generar la segmentación escalable por piso
-    for i in range(1, int(num_pisos) + 1):
-        vlan_id = i * 10
-        # Incremento del tercer octeto para evitar colisiones de red
-        octeto3_nuevo = (int(octetos[2]) + i - 1) % 256
-        ip_piso = f"{octetos[0]}.{octetos[1]}.{octeto3_nuevo}.0"
+        # 1. Validación y Creación del objeto IP
+        ip_obj = ipaddress.IPv4Address(ip_base_str)
+        octetos = str(ip_obj).split('.')
         
-        datos_red.append({
-            "Piso": f"Piso {i}",
-            "VLAN": vlan_id,
-            "Segmento IPv4": ip_piso,
-            "IPv6 Mapeada": ipv4_to_ipv6_mapped(ip_piso),
-            "Gateway": f"{octetos[0]}.{octetos[1]}.{octeto3_nuevo}.1"
-        })
+        # 2. Clase de la IP e IPs Reservadas
+        primer_octeto = int(octetos[0])
+        if 1 <= primer_octeto <= 126:
+            clase = "A"
+            reservada = "Privada (10.0.0.0)" if primer_octeto == 10 else "Pública"
+        elif 128 <= primer_octeto <= 191:
+            clase = "B"
+            reservada = "Privada (172.16.0.0)" if (primer_octeto == 172 and 16 <= int(octetos[1]) <= 31) else "Pública"
+        elif 192 <= primer_octeto <= 223:
+            clase = "C"
+            reservada = "Privada (192.168.0.0)" if (primer_octeto == 192 and int(octetos[1]) == 168) else "Pública"
+        else:
+            clase = "D/E"
+            reservada = "Multicast/Experimental"
 
-    df = pd.DataFrame(datos_red)
-    st.subheader("📋 Plan de Direccionamiento Generado")
-    st.dataframe(df, use_container_width=True)
+        # 3. Conversión a IPv6 (6to4)
+        # Se toma el formato 2002:WWXX:YYZZ::/48
+        ipv6_6to4 = f"2002:{int(octetos[0]):02x}{int(octetos[1]):02x}:{int(octetos[2]):02x}{int(octetos[3]):02x}::1"
 
-    # =========================================================
-    # GENERACIÓN DE SCRIPTS SEGÚN FABRICANTE (MODULAR)
-    # =========================================================
-    comandos_lista = []
-    
-    # Lógica de comandos comentada para buenas prácticas
-    for index, row in df.iterrows():
-        if marca_equipo == "Cisco":
-            comandos_lista.extend([
-                f"! Configuración para {row['Piso']}",
-                f"vlan {row['VLAN']}",
-                f" name PISO_{index+1}",
-                f"interface vlan {row['VLAN']}",
-                f" ip address {row['Gateway']} 255.255.255.0",
-                " no shut", "exit"
-            ])
-        elif marca_equipo == "Huawei":
-            comandos_lista.extend([
-                f"# Configuración para {row['Piso']}",
-                f"vlan {row['VLAN']}",
-                f" description PISO_{index+1}",
-                f"interface Vlanif{row['VLAN']}",
-                f" ip address {row['Gateway']} 255.255.255.0", "quit"
-            ])
-        elif marca_equipo == "Fortinet":
-            comandos_lista.extend([
-                f"# Configuración Interface VLAN para {row['Piso']}",
-                "config system interface",
-                f" edit vlan{row['VLAN']}",
-                f"  set ip {row['Gateway']} 255.255.255.0",
-                f"  set vlanid {row['VLAN']}",
-                "  set interface internal", " next", "end"
-            ])
+        print(f"--- ANÁLISIS DE IP: {ip_base_str} ---")
+        print(f"Octetos: | {octetos[0]} | {octetos[1]} | {octetos[2]} | {octetos[3]} |")
+        print(f"Estado: Válida | Clase: {clase} | Tipo: {reservada}")
+        print(f"Conversión IPv6 (6to4): {ipv6_6to4}\n")
 
-    script_final = "\n".join(comandos_lista)
-    
-    # Mostrar el script en pantalla
-    st.subheader("📜 Script de Configuración Preview")
-    st.code(script_final, language="bash")
-
-    # =========================================================
-    # EXPORTACIÓN Y DESPLIEGUE (REQUERIMIENTOS DEL PROFESOR)
-    # =========================================================
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Observación: Exportar en TXT
-        st.download_button(
-            label="💾 Descargar Script (.txt)",
-            data=script_final,
-            file_name=f"script_{marca_equipo}_pisos.txt",
-            mime="text/plain"
-        )
-
-    with col2:
-        # Botón para despliegue real por SSH
-        if st.button("🚀 Ejecutar Despliegue SSH"):
-            st.info("Intentando conexión... Se generará un Backup automático.")
-            device_map = {"Cisco": "cisco_ios", "Huawei": "huawei", "Fortinet": "fortinet"}
+        # 4. Segmentación VLAN para 5 Pisos (VLSM simplificado)
+        print(f"{'PISO':<8} | {'VLAN':<5} | {'SUBRED':<15} | {'HOSTS':<8} | {'POOL DHCP':<25} | {'DNS'}")
+        print("-" * 85)
+        
+        dns_list = ["8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9"]
+        
+        for i in range(1, 6):
+            # Simulamos segmentos cambiando el tercer octeto para el ejemplo
+            subred = f"{octetos[0]}.{octetos[1]}.{i * 10}.0/24"
+            red = ipaddress.IPv4Network(subred)
+            pool = f"{list(red.hosts())[9]} - {list(red.hosts())[-1]}" # Salta las primeras 10 IPs para equipos fijos
             
-            dispositivo = {
-                'device_type': device_map[marca_equipo],
-                'host': host_ip, 'username': user, 'password': pwd,
-            }
+            print(f"Piso {i:<3} | {i*10:<5} | {subred:<15} | {red.num_addresses - 2:<8} | {pool:<25} | {dns_list[i-1]}")
 
-            try:
-                with st.spinner('Procesando...'):
-                    net_connect = ConnectHandler(**dispositivo)
-                    # Backup preventivo (Rollback)
-                    backup = net_connect.send_command("show running-config")
-                    with open(f"backup_{host_ip}.cfg", "w") as f:
-                        f.write(backup)
-                    
-                    output = net_connect.send_config_set(comandos_lista)
-                    st.success("¡Configuración aplicada!")
-                    st.text_area("Logs:", output)
-                    net_connect.disconnect()
-            except Exception as e:
-                st.error(f"Error de conexión: {str(e)}")
-                st.warning("No se pudo conectar al equipo físico. Use el botón 'Descargar Script' para carga manual.")
+    except ValueError:
+        print("Error: La dirección IPv4 proporcionada no es válida.")
 
-else:
-    st.error("⚠️ Por favor, ingresa una IP Base válida para comenzar.")
-
-# Footer informativo para control de versiones
-st.divider()
-st.caption("Estructura v2.0 | Buenas prácticas de comentariado aplicadas | Compatible con Git.")
+# --- EJECUCIÓN ---
+ip_usuario = input("Introduce la IP IPv4 (ej. 192.168.1.1): ")
+generar_herramienta_red(ip_usuario)
