@@ -1,0 +1,129 @@
+import streamlit as st
+import pandas as pd
+from netmiko import ConnectHandler
+import re
+
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="Network Tool Pro", layout="wide")
+
+# --- LÓGICA DE NEGOCIO (CALCULADORA) ---
+def validar_ip(ip):
+    patron = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
+    if patron.match(ip):
+        octetos = ip.split('.')
+        return all(0 <= int(o) <= 255 for o in octetos)
+    return False
+
+def ipv4_to_ipv6_mapped(ipv4):
+    try:
+        octetos = [int(o) for o in ipv4.split('.')]
+        hex_ip = '{:02x}{:02x}:{:02x}{:02x}'.format(*octetos)
+        return f"::ffff:{hex_ip[:4]}:{hex_ip[4:]}".upper()
+    except:
+        return "N/A"
+
+def calcular_clase(ip):
+    primer_octeto = int(ip.split('.')[0])
+    if primer_octeto <= 127: return "A"
+    elif primer_octeto <= 191: return "B"
+    elif primer_octeto <= 223: return "C"
+    return "D/E"
+
+# --- INTERFAZ DE USUARIO ---
+st.title("🚀 Herramienta de Automatización de Red Escatable")
+st.markdown("Generación de direccionamiento, segmentación de pisos y despliegue Multi-Vendor.")
+
+# Sidebar - Configuración General
+with st.sidebar:
+    st.header("Configuración")
+    ip_base = st.text_input("IP Base de Red", "192.168.1.0")
+    num_pisos = st.slider("Número de Pisos/VLANs", 1, 10, 5)
+    marca_equipo = st.selectbox("Fabricante Destino", ["Cisco", "Huawei", "Fortinet"])
+    
+    st.divider()
+    st.subheader("Acceso SSH (Despliegue)")
+    host_ip = st.text_input("Host IP Equipo", "10.0.0.1")
+    user = st.text_input("Usuario", "admin")
+    pwd = st.text_input("Password", type="password")
+
+# Cuerpo Principal
+if validar_ip(ip_base):
+    octetos = ip_base.split('.')
+    datos_red = []
+
+    for i in range(1, num_pisos + 1):
+        vlan_id = i * 10
+        # Segmentación por 3er octeto para escalabilidad
+        octeto3_nuevo = (int(octetos[2]) + i - 1) % 256
+        ip_piso = f"{octetos[0]}.{octetos[1]}.{octeto3_nuevo}.0"
+        
+        datos_red.append({
+            "Piso": f"Piso {i}",
+            "VLAN": vlan_id,
+            "Segmento IPv4": ip_piso,
+            "Octetos": f"{octetos[0]}|{octetos[1]}|{octeto3_nuevo}|0",
+            "Clase": calcular_clase(ip_piso),
+            "IPv6 Mapeada": ipv4_to_ipv6_mapped(ip_piso),
+            "Gateway": f"{octetos[0]}.{octetos[1]}.{octeto3_nuevo}.1",
+            "Pool DHCP": f".10 - .254",
+            "DNS": "8.8.8.8"
+        })
+
+    df = pd.DataFrame(datos_red)
+    st.subheader("📋 Planificación de Direccionamiento")
+    st.table(df)
+
+    # --- GENERACIÓN DE COMANDOS ---
+    st.subheader(f"🛠️ Scripts de Configuración para {marca_equipo}")
+    comandos_lista = []
+    
+    for index, row in df.iterrows():
+        if marca_equipo == "Cisco":
+            comandos_lista.extend([f"vlan {row['VLAN']}", f" name PISO_{row['Piso'][-1]}", "exit", 
+                                   f"interface vlan {row['VLAN']}", f" ip address {row['Gateway']} 255.255.255.0", " no shut", "exit"])
+        elif marca_equipo == "Huawei":
+            comandos_lista.extend([f"vlan {row['VLAN']}", f" description PISO_{row['Piso'][-1]}", "quit",
+                                   f"interface Vlanif{row['VLAN']}", f" ip address {row['Gateway']} 255.255.255.0", "quit"])
+        elif marca_equipo == "Fortinet":
+            comandos_lista.extend(["config system interface", f" edit vlan{row['VLAN']}", "  set vdom root", 
+                                   f"  set ip {row['Gateway']} 255.255.255.0", f"  set vlanid {row['VLAN']}", "  set interface internal", " next", "end"])
+
+    st.code("\n".join(comandos_lista), language="bash")
+
+    # --- BOTÓN DE DESPLIEGUE ---
+    if st.button("🚀 DESPLEGAR EN EQUIPO REAL"):
+        st.warning("Iniciando conexión SSH y Backup (Rollback)...")
+        
+        # Diccionario para Netmiko
+        device_map = {"Cisco": "cisco_ios", "Huawei": "huawei", "Fortinet": "fortinet"}
+        
+        dispositivo = {
+            'device_type': device_map[marca_equipo],
+            'host': host_ip,
+            'username': user,
+            'password': pwd,
+        }
+
+        try:
+            with st.spinner('Conectando y aplicando cambios...'):
+                net_connect = ConnectHandler(**dispositivo)
+                # Backup Rollback
+                backup = net_connect.send_command("show running-config")
+                with open(f"rollback_{host_ip}.cfg", "w") as f:
+                    f.write(backup)
+                
+                # Enviar comandos
+                output = net_connect.send_config_set(comandos_lista)
+                st.success("Configuración aplicada exitosamente.")
+                st.text_area("Log de Consola:", output)
+                net_connect.disconnect()
+        except Exception as e:
+            st.error(f"Falla en despliegue: {str(e)}")
+            st.info("Utilice el archivo generado en la carpeta local para Rollback manual.")
+
+else:
+    st.error("IP Base inválida. Por favor verifica los octetos (0-255).")
+
+# --- CONTROL DE VERSIONES (INFO) ---
+st.divider()
+st.caption("Estructura preparada para Git. Ejecute 'git init' en esta carpeta para control de versiones.")
