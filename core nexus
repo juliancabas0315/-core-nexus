@@ -1,52 +1,70 @@
 import ipaddress
+from netmiko import ConnectHandler
 
-def generar_herramienta_red(ip_base_str):
-    try:
-        # 1. Validación y Creación del objeto IP
-        ip_obj = ipaddress.IPv4Address(ip_base_str)
-        octetos = str(ip_obj).split('.')
-        
-        # 2. Clase de la IP e IPs Reservadas
-        primer_octeto = int(octetos[0])
-        if 1 <= primer_octeto <= 126:
-            clase = "A"
-            reservada = "Privada (10.0.0.0)" if primer_octeto == 10 else "Pública"
-        elif 128 <= primer_octeto <= 191:
-            clase = "B"
-            reservada = "Privada (172.16.0.0)" if (primer_octeto == 172 and 16 <= int(octetos[1]) <= 31) else "Pública"
-        elif 192 <= primer_octeto <= 223:
-            clase = "C"
-            reservada = "Privada (192.168.0.0)" if (primer_octeto == 192 and int(octetos[1]) == 168) else "Pública"
-        else:
-            clase = "D/E"
-            reservada = "Multicast/Experimental"
+class NetworkManager:
+    def __init__(self, ip_base, num_pisos):
+        self.ip_base = ipaddress.IPv4Interface(ip_base)
+        self.num_pisos = num_pisos
+        self.config_log = [] # Para Rollback
 
-        # 3. Conversión a IPv6 (6to4)
-        # Se toma el formato 2002:WWXX:YYZZ::/48
-        ipv6_6to4 = f"2002:{int(octetos[0]):02x}{int(octetos[1]):02x}:{int(octetos[2]):02x}{int(octetos[3]):02x}::1"
+    def generar_segmentacion(self):
+        """Calcula la red para cada piso de forma dinámica"""
+        segmentos = []
+        for i in range(1, self.num_pisos + 1):
+            # Creamos subredes basadas en el piso (ej. 192.168.10.0, 20.0...)
+            red_piso = f"{self.ip_base.ip + (i * 256)}" # Lógica simple de salto
+            segmentos.append({
+                "piso": i,
+                "vlan": i * 10,
+                "red": red_piso,
+                "gateway": f"{red_piso[:-1]}1"
+            })
+        return segmentos
 
-        print(f"--- ANÁLISIS DE IP: {ip_base_str} ---")
-        print(f"Octetos: | {octetos[0]} | {octetos[1]} | {octetos[2]} | {octetos[3]} |")
-        print(f"Estado: Válida | Clase: {clase} | Tipo: {reservada}")
-        print(f"Conversión IPv6 (6to4): {ipv6_6to4}\n")
+    def push_config(self, device_data, comandos):
+        """Envia la configuración con manejo de errores (Rollback)"""
+        try:
+            with ConnectHandler(**device_data) as net_connect:
+                net_connect.enable()
+                output = net_connect.send_config_set(comandos)
+                print(f"✅ Éxito en {device_data['host']}")
+                return True
+        except Exception as e:
+            print(f"❌ ERROR en {device_data['host']}: {e}")
+            self.ejecutar_rollback(device_data)
+            return False
 
-        # 4. Segmentación VLAN para 5 Pisos (VLSM simplificado)
-        print(f"{'PISO':<8} | {'VLAN':<5} | {'SUBRED':<15} | {'HOSTS':<8} | {'POOL DHCP':<25} | {'DNS'}")
-        print("-" * 85)
-        
-        dns_list = ["8.8.8.8", "8.8.4.4", "1.1.1.1", "1.0.0.1", "9.9.9.9"]
-        
-        for i in range(1, 6):
-            # Simulamos segmentos cambiando el tercer octeto para el ejemplo
-            subred = f"{octetos[0]}.{octetos[1]}.{i * 10}.0/24"
-            red = ipaddress.IPv4Network(subred)
-            pool = f"{list(red.hosts())[9]} - {list(red.hosts())[-1]}" # Salta las primeras 10 IPs para equipos fijos
-            
-            print(f"Piso {i:<3} | {i*10:<5} | {subred:<15} | {red.num_addresses - 2:<8} | {pool:<25} | {dns_list[i-1]}")
+    def ejecutar_rollback(self, device_data):
+        """Lógica para revertir cambios en caso de falla"""
+        print(f"⚠️ Iniciando Rollback preventivo en {device_data['host']}...")
+        # Aquí podrías cargar un 'checkpoint' previo o comandos 'no vlan X'
+        pass
 
-    except ValueError:
-        print("Error: La dirección IPv4 proporcionada no es válida.")
+# --- BLOQUE DE PLANTILLAS POR MARCA ---
+def get_commands(marca, vlan, gateway):
+    templates = {
+        "cisco_ios": [f"vlan {vlan}", f"name PISO_{vlan//10}", "exit"],
+        "huawei": [f"vlan {vlan}", "quit", f"interface Vlanif {vlan}"],
+        "fortinet": [f"config system interface", f"edit vlan{vlan}", "set vdom root"]
+    }
+    return templates.get(marca, [])
 
-# --- EJECUCIÓN ---
-ip_usuario = input("Introduce la IP IPv4 (ej. 192.168.1.1): ")
-generar_herramienta_red(ip_usuario)
+# --- EJECUCIÓN PRINCIPAL ---
+if __name__ == "__main__":
+    pisos = int(input("¿Cuántos pisos deseas configurar? "))
+    ip_init = "192.168.0.0/24"
+    
+    manager = NetworkManager(ip_init, pisos)
+    plan = manager.generar_segmentacion()
+
+    # Ejemplo de Host a configurar
+    mi_switch = {
+        'device_type': 'cisco_ios', # Cambiar a 'huawei' o 'fortinet' según sea el caso
+        'host': '10.0.0.5',
+        'username': 'admin',
+        'password': 'password123',
+    }
+
+    for p in plan:
+        cmds = get_commands(mi_switch['device_type'], p['vlan'], p['gateway'])
+        manager.push_config(mi_switch, cmds)
