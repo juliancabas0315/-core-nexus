@@ -2,149 +2,164 @@ import streamlit as st
 import pandas as pd
 import re
 import io
-from netmiko import ConnectHandler # Librería para despliegue directo
+from netmiko import ConnectHandler  # Librería para despliegue directo
 
-# --- CONFIGURACIÓN DE PÁGINA ---
+# --- CONFIGURACIÓN DE PÁGINA PROFESIONAL ---
 st.set_page_config(
-    page_title="NetEng Pro v7 - Auto-Deploy & Fiber Infrastructure",
+    page_title="CORE-NEXUS Enterprise Engine",
     layout="wide",
     initial_sidebar_state="expanded",
-    page_icon="📡"
+    page_icon="🛡️"
 )
+
+# --- ESTILOS PERSONALIZADOS ---
+st.markdown("""
+    <style>
+    .main { background-color: #f0f2f6; }
+    .stButton>button { width: 100%; border-radius: 5px; height: 3em; background-color: #004a99; color: white; }
+    .stMetric { background-color: #ffffff; padding: 10px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+    </style>
+    """, unsafe_allow_html=True)
 
 # --- MÓDULO DE LÓGICA TÉCNICA ---
 
 def conv_ipv4_to_ipv6(ipv4):
-    """Genera IPv6 Mapped estandarizada."""
     try:
         parts = [int(x) for x in ipv4.split('.')]
-        return f"2001:db8:1:{parts[2]}::{parts[3]}/64"
+        return f"2001:db8:300:{parts[2]}::{parts[3]}/64"
     except: return "N/A"
 
-def generar_config_core(vendor, datos, global_cfg):
-    """Genera comandos con modos de configuración completos."""
+def generar_config_avanzada(vendor, datos, global_cfg):
+    """Genera comandos de VLAN, Interfaces, IPv6 y DHCP Server."""
     dep, rb = [], []
     
     if vendor == "Cisco":
         dep.extend(["enable", "configure terminal", f"hostname {global_cfg['host']}"])
-        rb.extend(["enable", "configure terminal"])
         for _, r in datos.iterrows():
+            # VLAN e Interface
             dep.extend([f"vlan {r['VLAN']}", f" name {r['Nombre']}", " exit",
                         f"interface vlan {r['VLAN']}", f" ip address {r['IPv4']} 255.255.255.0",
                         f" ipv6 address {r['IPv6'].split('/')[0]}/64", " no shut", " exit"])
-            rb.extend([f"no interface vlan {r['VLAN']}", f"no vlan {r['VLAN']}"])
+            # DHCP Pool
+            dep.extend([f"ip dhcp pool POOL_{r['Nombre']}", f" network {r['IPv4'][:-1]}0 255.255.255.0",
+                        f" default-router {r['IPv4']}", " dns-server 8.8.8.8 1.1.1.1", " exit"])
+            # Rollback
+            rb.extend([f"no ip dhcp pool POOL_{r['Nombre']}", f"no interface vlan {r['VLAN']}", f"no vlan {r['VLAN']}"])
         dep.extend(["end", "write memory"])
 
     elif vendor == "Huawei":
-        dep.extend(["system-view", f"sysname {global_cfg['host']}", "ipv6"])
-        rb.extend(["system-view"])
+        dep.extend(["system-view", f"sysname {global_cfg['host']}", "ipv6", "dhcp enable"])
         for _, r in datos.iterrows():
+            # VLAN e Interface
             dep.extend([f"vlan {r['VLAN']}", f" description {r['Nombre']}", " quit",
                         f"interface Vlanif{r['VLAN']}", f" ip address {r['IPv4']} 255.255.255.0",
-                        f" ipv6 address {r['IPv6'].replace('/64', ' 64')}", " quit"])
+                        f" ipv6 address {r['IPv6'].replace('/64', ' 64')}", " dhcp select interface", " quit"])
+            # Rollback
             rb.extend([f"undo interface Vlanif{r['VLAN']}", f"undo vlan {r['VLAN']}"])
         dep.extend(["return", "save", "y"])
 
     return dep, rb
 
 # --- INTERFAZ DE USUARIO ---
-st.title("📡 NetEng Pro v7.0 - Despliegue & AP Config")
+st.title("🛡️ CORE-NEXUS: Enterprise Network Engine")
+st.caption("Arquitectura de Red de Alto Nivel para Infraestructura y Telecomunicaciones")
 
 with st.sidebar:
-    st.header("🛠️ Configuración Global")
-    proyecto = st.text_input("Proyecto", "Fibertec_Sopo_01")
+    st.header("⚙️ Control Maestro")
+    proyecto = st.text_input("Nombre del Proyecto", "FIBERTEC_OP_2026")
     vendor = st.selectbox("Fabricante Core", ["Cisco", "Huawei", "Fortinet"])
-    ip_red = st.text_input("Red Base IPv4", "192.168.10.0")
+    ip_red = st.text_input("Segmento IPv4 Base", "192.168.50.0")
     
     st.divider()
-    st.subheader("🚀 Credenciales de Despliegue")
-    target_ip = st.text_input("IP Destino (SSH)", placeholder="10.0.0.1")
+    st.subheader("🔑 Acceso para Despliegue")
+    target_ip = st.text_input("IP de Gestión (SSH)", placeholder="10.0.0.1")
     ssh_user = st.text_input("Usuario", "admin")
-    ssh_pass = st.text_input("Password", type="password")
+    ssh_pass = st.text_input("Contraseña", type="password")
 
 if ip_red:
-    c1, c2, c3 = st.columns(3)
-    num_seg = c1.number_input("N° Segmentos", 1, 10, 2)
-    host_name = c2.text_input("Hostname", "CORE-SW-01")
-    vlan_init = c3.number_input("VLAN Inicial", 100, 4000, 100)
+    col1, col2, col3 = st.columns(3)
+    num_seg = col1.number_input("Cantidad de Pisos/Áreas", 1, 15, 2)
+    host_name = col2.text_input("Nombre del Equipo", "CORE-SW-PRINCIPAL")
+    vlan_init = col3.number_input("VLAN de Inicio", 100, 4000, 100, step=10)
 
-    # Tabla de Direccionamiento
+    # Lógica de Datos
     octs = ip_red.split('.')
     lista_datos = []
     for i in range(num_seg):
         ipv4 = f"{octs[0]}.{octs[1]}.{int(octs[2])+i}.1"
         lista_datos.append({
-            "Piso": f"Nivel {i+1}",
-            "Nombre": f"VLAN_PISO_{i+1}",
+            "Piso": f"Segmento {i+1}",
+            "Nombre": f"VLAN_{vlan_init + (i*10)}",
             "VLAN": vlan_init + (i*10),
             "IPv4": ipv4,
-            "IPv6": conv_ipv4_to_ipv6(ipv4)
+            "IPv6": conv_ipv4_to_ipv6(ipv4),
+            "DHCP Pool": f"Pool_{vlan_init + (i*10)}"
         })
     df = pd.DataFrame(lista_datos)
+    
+    st.subheader("📋 Matriz de Direccionamiento & DHCP")
     st.table(df)
 
     # Generar Scripts
-    dep_cmds, rb_cmds = generar_config_core(vendor, df, {"host": host_name})
+    dep_cmds, rb_cmds = generar_config_avanzada(vendor, df, {"host": host_name})
 
-    # TABS
-    t1, t2, t3, t4 = st.tabs(["📄 Scripts Core", "⏪ Rollback", "📶 TP-LINK A200 (Manual)", "⚡ DESPLIEGUE DIRECTO"])
+    # TABS DE TRABAJO
+    t1, t2, t3, t4 = st.tabs(["📄 Scripts Generados", "⏪ Reversión (Rollback)", "📶 Config TPLINK A200", "⚡ DESPLIEGUE DIRECTO"])
 
     with t1:
+        st.info("Comandos completos incluyendo Pools de DHCP e IPv6.")
         st.code("\n".join(dep_cmds), language="bash")
     
     with t2:
+        st.warning("Use estos comandos para limpiar la configuración del equipo.")
         st.code("\n".join(rb_cmds), language="bash")
 
     with t3:
-        st.subheader("🛠️ Configuración Access Point TP-Link Archer A200")
+        st.subheader("🛠️ Guía Técnica TP-Link Archer A200")
         
         st.markdown(f"""
-        Siga estos pasos para integrar el AP a la infraestructura de **Fibertec**:
-
-        1. **Acceso Inicial:** Conecte su PC al puerto LAN 1. Ingrese a `http://192.168.0.1`.
-        2. **Modo de Operación:** Vaya a `Advanced > Operation Mode` y seleccione **Access Point Mode**. Esto desactivará las funciones de router para evitar conflictos de NAT.
-        3. **Configuración LAN Local:**
-            - Ingrese a `Network > LAN`.
-            - **IP Address:** `{df.iloc[0]['IPv4']}` (o una IP libre en el segmento).
-            - **Subnet Mask:** `255.255.255.0`.
-        4. **Red Inalámbrica (SSID):**
-            - Ingrese a `Wireless > Wireless Settings`.
-            - **SSID (2.4GHz/5GHz):** Defina el nombre de red.
-            - **Security:** Seleccione **WPA2-PSK (AES)** para máxima compatibilidad.
-        5. **DHCP & VLANs:**
-            - Si el Core maneja el DHCP, desactive el DHCP en el TP-Link (`Network > DHCP Server > Disable`).
-            - Si requiere segmentación, configure el **IPTV/VLAN ID** en `Advanced > Network > IPTV` para taguear el tráfico hacia el switch.
+        **Configuración para Red Local:**
+        1. **Modo:** Cambie a 'Access Point Mode' en `Advanced > Operation Mode`.
+        2. **LAN IP:** `{df.iloc[0]['IPv4']}` (Sugerida para gestión).
+        3. **DHCP:** Desactívelo si el Core maneja los Pools. Si no, use el rango `{df.iloc[0]['IPv4'][:-1]}10` al `.200`.
+        4. **Seguridad:** WPA2-PSK (AES) con SSID: `{proyecto}_WiFi`.
         """)
 
     with t4:
-        st.subheader("🚀 Push Configuration (Auto-Deploy)")
-        if st.button("🔥 EJECUTAR EN EQUIPO REAL"):
-            try:
-                device_types = {"Cisco": "cisco_ios", "Huawei": "huawei", "Fortinet": "fortinet"}
-                dispositivo = {
-                    'device_type': device_types[vendor],
-                    'host': target_ip,
-                    'username': ssh_user,
-                    'password': ssh_pass,
-                    'secret': ssh_pass
-                }
-                with st.spinner("Estableciendo conexión SSH..."):
-                    net_connect = ConnectHandler(**dispositivo)
-                    if vendor == "Cisco": net_connect.enable()
-                    
-                    st.info("Enviando bloque de comandos...")
-                    output = net_connect.send_config_set(dep_cmds)
-                    st.success("Despliegue completado con éxito.")
-                    st.text_area("Log de Consola:", output, height=250)
-                    net_connect.disconnect()
-            except Exception as e:
-                st.error(f"Falla en el despliegue: {e}")
+        st.subheader("🚀 Envío de Configuración al Equipo Físico")
+        st.warning("Asegúrese de tener conectividad SSH hacia la IP de gestión.")
+        
+        if st.button("🔥 EJECUTAR DESPLIEGUE AHORA"):
+            if not target_ip or not ssh_pass:
+                st.error("Faltan datos de conexión (IP o Password).")
+            else:
+                try:
+                    driver_map = {"Cisco": "cisco_ios", "Huawei": "huawei", "Fortinet": "fortinet"}
+                    device = {
+                        'device_type': driver_map[vendor],
+                        'host': target_ip,
+                        'username': ssh_user,
+                        'password': ssh_pass,
+                        'secret': ssh_pass # Password de enable
+                    }
+                    with st.spinner(f"Estableciendo túnel SSH con {target_ip}..."):
+                        net_conn = ConnectHandler(**device)
+                        if vendor == "Cisco": net_conn.enable()
+                        
+                        st.info("Enviando bloque de comandos de red...")
+                        output = net_conn.send_config_set(dep_cmds)
+                        
+                        st.success("✅ ¡Configuración aplicada exitosamente!")
+                        st.text_area("Consola del Equipo:", output, height=300)
+                        net_conn.disconnect()
+                except Exception as e:
+                    st.error(f"Falla crítica en el despliegue: {e}")
 
     # Exportación
     buffer = io.StringIO()
-    buffer.write(f"PROYECTO: {proyecto}\n" + "="*30 + "\n")
-    buffer.write(">> CONFIGURACIÓN CORE:\n" + "\n".join(dep_cmds))
-    st.download_button("💾 Guardar Reporte TXT", buffer.getvalue(), file_name=f"{proyecto}_Final.txt")
+    buffer.write(f"CORE-NEXUS REPORT - {proyecto}\n" + "="*40 + "\n")
+    buffer.write(">> SCRIPT CONFIG:\n" + "\n".join(dep_cmds))
+    st.download_button("💾 Exportar Reporte Técnico", buffer.getvalue(), file_name=f"{proyecto}_CoreNexus.txt")
 
 else:
-    st.info("Complete el segmento base de red para generar la arquitectura.")
+    st.info("Ingrese un segmento base para activar los motores de cálculo.")
