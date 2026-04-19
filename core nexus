@@ -1,88 +1,141 @@
+import streamlit as st
+import pandas as pd
 from netmiko import ConnectHandler
-import json
+import re
+import io
 
-# 1. BLOQUE DE DEFINICIÓN DE DISPOSITIVOS (Escalabilidad)
-# Aquí configuras los parámetros de acceso. 
-# El 'device_type' de Netmiko detecta si es cisco_ios, huawei, o fortinet.
-dispositivos = [
-    {
-        "device_type": "cisco_ios",
-        "host": "192.168.1.1",
-        "username": "admin",
-        "password": "password123",
-        "secret": "enable_pass",
-        "marca": "Cisco"
-    },
-    {
-        "device_type": "fortinet",
-        "host": "192.168.1.2",
-        "username": "admin",
-        "password": "password123",
-        "marca": "Fortinet"
-    }
-]
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="Network Tool Pro v4", layout="wide", page_icon="⚙️")
 
-# 2. BLOQUE DE GENERACIÓN DE COMANDOS (Adaptativo)
-def generar_configuracion(piso, vlan_id, ip_base, marca):
+# --- LÓGICA DE NEGOCIO / FUNCIONES ---
+
+def validar_ip(ip):
+    patron = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
+    if patron.match(ip):
+        octetos = ip.split('.')
+        return all(0 <= int(o) <= 255 for o in octetos)
+    return False
+
+def generar_scripts_completos(vendor, df_pisos):
     """
-    Crea los comandos específicos según la marca del equipo.
+    Genera bloques completos de comandos incluyendo entrada a modo config 
+    y salida con guardado de cambios.
     """
-    if marca == "Cisco":
-        return [
-            f"vlan {vlan_id}",
-            f"name PISO_{piso}",
-            f"interface vlan {vlan_id}",
-            f"ip address {ip_base} 255.255.255.0",
-            "no shutdown"
-        ]
-    elif marca == "Huawei":
-        return [
-            f"vlan {vlan_id}",
-            f"description PISO_{piso}",
-            f"interface Vlanif{vlan_id}",
-            f"ip address {ip_base} 255.255.255.0"
-        ]
-    elif marca == "Fortinet":
-        return [
-            f"config system interface",
-            f"edit vlan{vlan_id}",
-            f"set vdom root",
-            f"set ip {ip_base} 255.255.255.0",
-            f"set interface internal",
-            f"set vlanid {vlan_id}",
-            "next",
-            "end"
-        ]
+    deploy = []
+    rollback = []
 
-# 3. BLOQUE DE EJECUCIÓN Y ROLLBACK
-def aplicar_configuracion(num_pisos):
-    for equipo in dispositivos:
-        print(f"--- Conectando a {equipo['marca']} ({equipo['host']}) ---")
+    if vendor == "Cisco":
+        deploy.extend(["enable", "configure terminal"])
+        rollback.extend(["enable", "configure terminal"])
+        
+        for _, row in df_pisos.iterrows():
+            v, n, g = row['VLAN'], row['Nombre'], row['Gateway']
+            # Deploy
+            deploy.extend([f"vlan {v}", f" name {n}", " exit", 
+                           f"interface vlan {v}", f" ip address {g} 255.255.255.0", " no shut", " exit"])
+            # Rollback
+            rollback.extend([f"no interface vlan {v}", f"no vlan {v}"])
+            
+        deploy.extend(["end", "write memory"])
+        rollback.extend(["end", "write memory"])
+
+    elif vendor == "Huawei":
+        deploy.extend(["system-view"])
+        rollback.extend(["system-view"])
+        
+        for _, row in df_pisos.iterrows():
+            v, n, g = row['VLAN'], row['Nombre'], row['Gateway']
+            # Deploy
+            deploy.extend([f"vlan {v}", f" description {n}", " quit",
+                           f"interface Vlanif{v}", f" ip address {g} 255.255.255.0", " quit"])
+            # Rollback
+            rollback.extend([f"undo interface Vlanif{v}", f"undo vlan {v}"])
+            
+        deploy.extend(["return", "save", "y"]) # 'y' para confirmar el save
+        rollback.extend(["return", "save", "y"])
+
+    elif vendor == "Fortinet":
+        # Fortinet usa bloques indentados
+        deploy.append("config system interface")
+        rollback.append("config system interface")
+        
+        for _, row in df_pisos.iterrows():
+            v, n, g = row['VLAN'], row['Nombre'], row['Gateway']
+            # Deploy
+            deploy.extend([f"    edit vlan{v}", f"        set vdom root", f"        set ip {g} 255.255.255.0", 
+                           f"        set vlanid {v}", f"        set interface internal", "    next"])
+            # Rollback
+            rollback.extend([f"    delete vlan{v}"])
+            
+        deploy.append("end")
+        rollback.append("end")
+        
+    return deploy, rollback
+
+# --- INTERFAZ DE USUARIO ---
+
+st.title("🚀 Network Automation Pro - Full Script Mode")
+st.markdown("Generación de scripts completos con **modos de configuración** y **rollback**.")
+
+with st.sidebar:
+    st.header("⚙️ Configuración")
+    ip_base = st.text_input("IP Base (Red)", "192.168.1.0")
+    marca_equipo = st.selectbox("Fabricante", ["Cisco", "Huawei", "Fortinet"])
+    
+    st.divider()
+    st.subheader("🔑 Acceso SSH")
+    host_ip = st.text_input("IP Host", "10.0.0.1")
+    user = st.text_input("User", "admin")
+    pwd = st.text_input("Pass", type="password")
+
+if validar_ip(ip_base):
+    st.subheader("🏢 Detalle de Segmentos")
+    num_pisos = st.number_input("Cantidad de Pisos:", 1, 50, 2)
+    
+    datos = []
+    octs = ip_base.split('.')
+    for i in range(num_pisos):
+        with st.expander(f"Piso {i+1}", expanded=True):
+            c1, c2 = st.columns(2)
+            with c1:
+                nom = st.text_input("Nombre", f"PISO_{i+1}", key=f"n{i}")
+            with c2:
+                vlan = st.number_input("VLAN", 1, 4094, (i+1)*10, key=f"v{i}")
+            gw = f"{octs[0]}.{octs[1]}.{(int(octs[2])+i)%256}.1"
+            datos.append({"Nombre": nom, "VLAN": vlan, "Gateway": gw})
+
+    df = pd.DataFrame(datos)
+    st.table(df)
+
+    # Generación de scripts finales
+    script_deploy, script_rollback = generar_scripts_completos(marca_equipo, df)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.success("📝 Script de Despliegue")
+        st.code("\n".join(script_deploy), language="bash")
+    with col2:
+        st.warning("⏪ Script de Rollback")
+        st.code("\n".join(script_rollback), language="bash")
+
+    # --- EXPORTACIÓN ---
+    txt_content = f"### SCRIPT PARA {marca_equipo} ###\n\n"
+    txt_content += "--- DESPLIEGUE ---\n" + "\n".join(script_deploy)
+    txt_content += "\n\n--- ROLLBACK ---\n" + "\n".join(script_rollback)
+    
+    st.download_button("💾 Descargar todo en TXT", txt_content, file_name=f"Config_{marca_equipo}.txt")
+
+    # --- EJECUCIÓN ---
+    if st.button("🚀 APLICAR CAMBIOS EN VIVO"):
         try:
-            net_connect = ConnectHandler(**{k: v for k, v in equipo.items() if k != 'marca'})
-            net_connect.enable()
-            
-            # Crear respaldo antes de cambiar (Rollback manual simple)
-            backup = net_connect.send_command("show running-config")
-            with open(f"backup_{equipo['host']}.cfg", "w") as f:
-                f.write(backup)
-
-            for p in range(1, num_pisos + 1):
-                vlan = p * 10
-                ip = f"192.168.{vlan}.1"
-                comandos = generar_configuracion(p, vlan, ip, equipo['marca'])
-                
-                print(f"Aplicando VLAN {vlan} para Piso {p}...")
-                net_connect.send_config_set(comandos)
-            
-            net_connect.save_config()
-            net_connect.disconnect()
-            print("Configuración exitosa.")
-
+            device_map = {"Cisco": "cisco_ios", "Huawei": "huawei", "Fortinet": "fortinet"}
+            with st.spinner("Conectando..."):
+                conn = ConnectHandler(device_type=device_map[marca_equipo], host=host_ip, username=user, password=pwd)
+                # Notar que enviamos la lista completa
+                out = conn.send_config_set(script_deploy)
+                st.text_area("Resultado:", out)
+                conn.disconnect()
         except Exception as e:
-            print(f"ERROR en {equipo['host']}: {e}")
-            print("Iniciando ROLLBACK: Por favor restaure el archivo de backup generado.")
-
-# EJECUCIÓN: Usuario elige cantidad de pisos
-cantidad = int(input("¿Cuántos pisos desea configurar? "))
-aplicar_configuracion(cantidad)
+            st.error(f"Error: {e}")
+else:
+    st.error("IP inválida.")
