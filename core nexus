@@ -1,60 +1,39 @@
 # =============================================================================
-# CORE-NEXUS: Enterprise Network Engine
+# CORE-NEXUS v4 — Enterprise Network Engine
 # =============================================================================
-# Este archivo genera scripts de configuración CLI para equipos de red
-# (Cisco, Huawei, Fortinet) a partir de parámetros simples ingresados por
-# el usuario en una interfaz web creada con Streamlit.
-#
-# FLUJO GENERAL:
-#   1. El usuario configura parámetros en el sidebar (proyecto, vendor, IPv6)
-#   2. La app calcula automáticamente las IPs y VLANs de cada equipo
-#   3. Se generan los comandos CLI listos para copiar/pegar o descargar
+# Novedades v4:
+#   - VLAN administrativa (la primera VLAN) configurada con SSH (puerto 22)
+#     usuario: admin / contraseña: admin — separada de las VLANs de datos
+#   - VLAN inicial desde 10, incremento de 1 en 1
+#   - Protocolos de enrutamiento IPv4: RIP, EIGRP, BGP
+#   - Protocolos de enrutamiento IPv6: RIPng, OSPFv3, EIGRPv6
+#   - Pestaña de Firewall independiente (Cisco ASA, Huawei USG, Fortinet FGT)
+#     separada de la configuración de switches, soporta multi-marca
 # =============================================================================
  
+import streamlit as st
+import pandas as pd
  
 # -----------------------------------------------------------------------------
-# IMPORTACIONES
+# CONFIGURACIÓN DE PÁGINA
 # -----------------------------------------------------------------------------
-import streamlit as st   # Framework que convierte este script en una app web.
-                         # Cada vez que el usuario cambia algo en la UI,
-                         # Streamlit re-ejecuta todo el archivo de arriba abajo.
- 
-import pandas as pd      # Librería para manejar tablas de datos (DataFrames).
-                         # Se usa para construir y mostrar la tabla de gateways.
- 
- 
-# -----------------------------------------------------------------------------
-# CONFIGURACIÓN GLOBAL DE LA PÁGINA
-# -----------------------------------------------------------------------------
-# Esta función DEBE ser la primera llamada a Streamlit en el archivo.
-# Define cómo se ve la pestaña del navegador y el layout de la app.
 st.set_page_config(
-    page_title="CORE-NEXUS Enterprise Engine",  # Título en la pestaña del navegador
-    layout="wide",                               # Usa todo el ancho de la pantalla
-    initial_sidebar_state="expanded",            # El sidebar arranca abierto
-    page_icon="🛡️"                              # Ícono en la pestaña del navegador
+    page_title="CORE-NEXUS Enterprise Engine",
+    layout="wide",
+    initial_sidebar_state="expanded",
+    page_icon="🛡️"
 )
  
- 
-# -----------------------------------------------------------------------------
-# ESTILOS PERSONALIZADOS (CSS)
-# -----------------------------------------------------------------------------
-# Streamlit permite inyectar CSS puro con st.markdown + unsafe_allow_html=True.
-# Esto sobreescribe los estilos por defecto de los componentes visuales.
 st.markdown("""
     <style>
-    .main { background-color: #f0f2f6; }   /* Fondo gris claro para la zona principal */
- 
-    /* Tarjetas de métricas (los cuadros con IPs de gateway) */
+    .main { background-color: #f0f2f6; }
     .stMetric {
         background-color: #ffffff;
         padding: 15px;
         border-radius: 10px;
-        border-left: 5px solid #004a99;          /* Línea azul a la izquierda */
-        box-shadow: 0 2px 4px rgba(0,0,0,0.05);  /* Sombra suave */
+        border-left: 5px solid #004a99;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
- 
-    /* Todos los botones ocupan el 100% del ancho de su contenedor */
     .stButton>button {
         width: 100%;
         border-radius: 5px;
@@ -64,523 +43,1166 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
  
- 
 # -----------------------------------------------------------------------------
 # CONSTANTES
 # -----------------------------------------------------------------------------
-# Valores fijos que se usan en múltiples partes del código.
-# Definirlos aquí en lugar de escribirlos directo ("192", "168", etc.)
-# facilita cambiarlos en un solo lugar si fuera necesario.
+IP_BASE_1     = "192"
+IP_BASE_2     = "168"
+VLAN_ID_MIN   = 10               # Ahora desde 10
+VLAN_ID_MAX   = 4094             # Límite real IEEE 802.1Q
+SEGMENTOS_MAX = 50               # Sin limitador artificial
+DNS_PRIMARIO  = "8.8.8.8"
+SUBNET_MASK   = "255.255.255.0"
+SSH_USER      = "admin"          # Usuario para gestión SSH
+SSH_PASS      = "admin"          # Contraseña para gestión SSH
  
-IP_BASE_1     = "192"            # Primer octeto fijo de todas las IPs
-IP_BASE_2     = "168"            # Segundo octeto fijo de todas las IPs
-VLAN_ID_MIN   = 100              # VLAN mínima permitida en el input
-VLAN_ID_MAX   = 4000             # VLAN máxima (límite estándar IEEE 802.1Q)
-SEGMENTOS_MAX = 15               # Máximo de equipos/segmentos configurables
-DNS_PRIMARIO  = "8.8.8.8"       # Servidor DNS que se asigna en los pools DHCP
-SUBNET_MASK   = "255.255.255.0"  # Máscara de subred /24 para todas las VLANs
- 
- 
-# =============================================================================
-# FUNCIONES TÉCNICAS
-# =============================================================================
- 
- 
-def generar_ipv6(ipv4: str, modo: str) -> str | None:
-    """
-    Genera una dirección IPv6 válida a partir de una IPv4, según el modo elegido.
- 
-    Modos disponibles:
-      - "ULA (fd00::/8) — Recomendado":
-            Equivalente IPv6 de 192.168.x.x. Enrutable entre VLANs localmente.
-            Fórmula: fd00:a8:<tercer_octeto>::<cuarto_octeto>/64
-            Ejemplo: 192.168.3.1 → fd00:a8:3::1/64
-            'a8' es 168 en hexadecimal (segundo octeto fijo de 192.168.x.x)
- 
-      - "Link-Local (fe80::) — Solo mismo segmento":
-            Todo equipo la genera automáticamente. NO es enrutable entre VLANs.
-            Se configura igual en todos los equipos: fe80::1/64 por interfaz.
-            Útil solo si no necesitas comunicación inter-VLAN por IPv6.
- 
-      - "Sin IPv6 — Solo IPv4":
-            No genera dirección IPv6. Los scripts omiten toda configuración IPv6.
-            La opción más simple si aún no usas IPv6 en producción.
- 
-    Args:
-        ipv4: Dirección IPv4 del gateway (ej: "192.168.3.1")
-        modo: Uno de los tres modos descritos arriba.
- 
-    Returns:
-        String con la dirección IPv6 y prefijo, o None si el modo es "Sin IPv6".
-    """
-    # Separar la IPv4 en sus 4 partes: ["192", "168", "3", "1"]
-    p = ipv4.split('.')
- 
-    # Convertir a entero el tercer octeto (subred) y el cuarto (host)
-    tercer = int(p[2])   # ej: 3  → identifica el segmento de red
-    cuarto = int(p[3])   # ej: 1  → identifica el host (gateway)
- 
-    # 168 en hexadecimal es "a8". Se usa como parte fija del prefijo ULA
-    # porque nuestras IPs siempre tienen 168 como segundo octeto (192.168.x.x)
-    hex_168 = "a8"
- 
-    if modo.startswith("ULA"):
-        # :x formatea el entero como hexadecimal sin prefijo 0x
-        # Resultado ejemplo: fd00:a8:3::1/64
-        return f"fd00:{hex_168}:{tercer:x}::{cuarto:x}/64"
- 
-    elif modo.startswith("Link-Local"):
-        # fe80:: es el prefijo reservado para Link-Local (RFC 4291)
-        # Solo se usa el cuarto octeto como identificador del host
-        # Resultado ejemplo: fe80::1/64
-        return f"fe80::{cuarto:x}/64"
- 
-    else:
-        # Modo "Sin IPv6": devuelve None para que los scripts omitan esas líneas
-        return None
- 
- 
-# -----------------------------------------------------------------------------
- 
-def generar_config_equipo(vendor: str, vlan: int, nombre: str,
-                           ipv4: str, ipv6: str | None, host: str) -> tuple:
-    """
-    Genera los comandos de deploy y rollback para UN solo equipo/segmento.
- 
-    Args:
-        vendor: Fabricante. Valores: "Cisco", "Huawei", "Fortinet"
-        vlan:   ID de VLAN
-        nombre: Nombre descriptivo de la VLAN
-        ipv4:   Dirección IPv4 del gateway
-        ipv6:   Dirección IPv6 del gateway, o None si no se usa IPv6
-        host:   Hostname del equipo
- 
-    Returns:
-        deploy:   Lista de comandos para aplicar la configuración
-        rollback: Lista de comandos para revertir (deshacer) los cambios
-    """
-    # dep = lista de comandos de despliegue (deploy)
-    # rb  = lista de comandos de reversión (rollback)
-    dep, rb = [], []
- 
-    # -------------------------------------------------------------------------
-    # BLOQUE CISCO IOS
-    # -------------------------------------------------------------------------
-    if vendor == "Cisco":
- 
-        # --- Comandos iniciales ---
-        dep.extend([
-            "enable",                    # Entrar al modo privilegiado
-            "configure terminal",        # Entrar al modo de configuración global
-            f"hostname {host}",          # Asignar nombre al equipo
- 
-            # Excluir las primeras IPs del rango DHCP para no asignarlas a clientes
-            # (se reservan para gateways, servidores, impresoras, etc.)
-            f"ip dhcp excluded-address {IP_BASE_1}.{IP_BASE_2}.0.1 "
-            f"{IP_BASE_1}.{IP_BASE_2}.0.10",
- 
-            # Crear la VLAN con su nombre descriptivo
-            f"vlan {vlan}",
-            f" name {nombre}",
-            " exit",
- 
-            # Configurar la interfaz virtual de la VLAN (SVI = Switch Virtual Interface)
-            # Esta interfaz actúa como gateway para los dispositivos de esa VLAN
-            f"interface vlan {vlan}",
-            f" ip address {ipv4} {SUBNET_MASK}",  # Asignar IP y máscara al gateway
-        ])
- 
-        # Solo agregar la línea IPv6 si el modo no es "Sin IPv6"
-        # ipv6.split('/')[0] extrae solo la dirección sin el prefijo /64
-        if ipv6:
-            dep.append(f" ipv6 address {ipv6.split('/')[0]}/64")
- 
-        dep.extend([
-            " no shut",                  # Activar la interfaz (por defecto está apagada)
-            " exit",
- 
-            # Crear el pool DHCP que asignará IPs automáticamente a los clientes
-            f"ip dhcp pool POOL_{vlan}",
- 
-            # ipv4[:-1] quita el último caracter de la IP ("1" del gateway)
-            # y añade "0" para obtener la dirección de red. Ej: 192.168.3.1 → 192.168.3.0
-            f" network {ipv4[:-1]}0 {SUBNET_MASK}",
- 
-            f" default-router {ipv4}",   # Indicar a los clientes cuál es el gateway
-            f" dns-server {DNS_PRIMARIO}", # Indicar el servidor DNS a los clientes
-            " exit",
-            "end",                       # Salir del modo de configuración
-            "write memory"               # Guardar la configuración en memoria no volátil
-        ])
- 
-        # Comandos para DESHACER todo lo anterior (rollback)
-        rb.extend([
-            "enable",
-            "configure terminal",
-            f"no ip dhcp pool POOL_{vlan}",   # Eliminar el pool DHCP
-            f"no interface vlan {vlan}",       # Eliminar la interfaz virtual
-            f"no vlan {vlan}",                 # Eliminar la VLAN
-            "end",
-            "write memory"
-        ])
- 
-    # -------------------------------------------------------------------------
-    # BLOQUE HUAWEI VRP
-    # -------------------------------------------------------------------------
-    elif vendor == "Huawei":
- 
-        # Entrar al modo de configuración global (equivalente a "configure terminal")
-        dep.extend(["system-view", f"sysname {host}"])
- 
-        # En Huawei, IPv6 debe habilitarse globalmente antes de usarlo en interfaces
-        if ipv6:
-            dep.append("ipv6")           # Habilitar IPv6 en el sistema
- 
-        dep.extend([
-            "dhcp enable",               # Habilitar el servicio DHCP globalmente
- 
-            # Crear la VLAN
-            f"vlan {vlan}",
-            f" description {nombre}",    # En Huawei se usa "description" en lugar de "name"
-            " quit",                     # En Huawei se usa "quit" en lugar de "exit"
- 
-            # Interfaz VLAN (Vlanif = VLAN Interface, equivalente a "interface vlan" en Cisco)
-            f"interface Vlanif{vlan}",
-            f" ip address {ipv4} {SUBNET_MASK}",
-        ])
- 
-        if ipv6:
-            # Huawei usa espacio en lugar de "/" para separar dirección y prefijo
-            # Ejemplo: "fd00:a8:3::1 64" en lugar de "fd00:a8:3::1/64"
-            dep.append(f" ipv6 address {ipv6.replace('/64', ' 64')}")
- 
-        dep.extend([
-            # DHCP "select interface" significa: usar la IP de esta interfaz
-            # como rango base para asignar IPs a los clientes (no necesita pool separado)
-            " dhcp select interface",
-            " quit",
-            "return",                    # Volver al modo usuario (equivalente a "end")
-            "save",                      # Guardar configuración
-            "y"                          # Confirmar el guardado (Huawei pide confirmación)
-        ])
- 
-        # Rollback: deshacer en orden inverso (primero interfaz, luego VLAN)
-        rb.extend([
-            "system-view",
-            f"undo interface Vlanif{vlan}",  # "undo" es el equivalente a "no" en Huawei
-            f"undo vlan {vlan}",
-            "return",
-            "save",
-            "y"
-        ])
- 
-    # -------------------------------------------------------------------------
-    # BLOQUE FORTINET FORTIOS
-    # -------------------------------------------------------------------------
-    elif vendor == "Fortinet":
- 
-        dep.extend([
-            # Configurar parámetros globales del sistema
-            "config system global",
-            f"    set hostname {host}",
-            "end",
- 
-            # Acceder al bloque de configuración de interfaces
-            "config system interface",
- 
-            # "edit" crea o edita una interfaz con ese nombre
-            f"    edit vlan{vlan}",
-            "        set vdom root",                   # Asignar al dominio virtual "root"
-            f"        set ip {ipv4} {SUBNET_MASK}",    # IP y máscara de la interfaz
-            f"        set vlanid {vlan}",               # ID de la VLAN (etiqueta 802.1Q)
-            "        set interface internal",           # Interfaz física padre
-        ])
- 
-        # En Fortinet, IPv6 se configura dentro de un sub-bloque "config ipv6"
-        if ipv6:
-            dep.extend([
-                "        config ipv6",
-                f"            set ip6-address {ipv6}",  # Dirección IPv6 completa con prefijo
-                "        end",                          # Cerrar sub-bloque IPv6
-            ])
- 
-        dep.extend([
-            "    next",   # Finalizar la edición de esta interfaz y pasar a la siguiente
-            "end"         # Cerrar el bloque "config system interface"
-        ])
- 
-        # Rollback: eliminar la interfaz VLAN creada
-        rb.extend([
-            "config system interface",
-            f"    delete vlan{vlan}",   # Eliminar la interfaz por nombre
-            "end"
-        ])
- 
-    # Devolver ambas listas como una tupla: (deploy, rollback)
-    return dep, rb
- 
- 
-# =============================================================================
-# INTERFAZ DE USUARIO — STREAMLIT
-# =============================================================================
-# A partir de aquí todo es código de UI. Streamlit ejecuta estas líneas
-# de arriba a abajo cada vez que el usuario interactúa con cualquier control.
- 
-st.title("🛡️ CORE-NEXUS: Enterprise Network Engine")
-st.caption("Sistema de Automatización de Redes e Infraestructura de Telecomunicaciones")
- 
- 
-# Lista de modos IPv6 disponibles. Se usa en el selectbox del sidebar
-# y también en generar_ipv6() para decidir qué tipo de dirección producir.
+# Opciones de modo IPv6
 MODOS_IPV6 = [
     "ULA (fd00::/8) — Recomendado",
     "Link-Local (fe80::) — Solo mismo segmento",
     "Sin IPv6 — Solo IPv4",
 ]
  
- 
-# -----------------------------------------------------------------------------
-# SIDEBAR — Panel de configuración izquierdo
-# -----------------------------------------------------------------------------
-# Todo lo que esté dentro del bloque "with st.sidebar:" aparece en el panel
-# lateral izquierdo de la app, no en el área principal.
-with st.sidebar:
-    st.header("⚙️ Configuración Maestro")
- 
-    # Campo de texto para el nombre del proyecto.
-    # El segundo argumento es el valor por defecto que aparece al iniciar la app.
-    proyecto = st.text_input("Nombre del Proyecto", "FIBERTEC_OP_2026")
- 
-    # Lista desplegable para elegir el fabricante del equipo.
-    # El valor seleccionado determina qué bloque de comandos genera generar_config_equipo()
-    vendor = st.selectbox("Fabricante Core", ["Cisco", "Huawei", "Fortinet"])
- 
-    st.divider()  # Línea horizontal separadora visual
- 
-    # Lista desplegable para elegir el modo de IPv6.
-    # El valor se pasa a generar_ipv6() para calcular la dirección correcta.
-    modo_ipv6 = st.selectbox("Modo IPv6", MODOS_IPV6)
- 
-    # Mostrar una explicación contextual según el modo elegido.
-    # startswith() compara solo el inicio del string para evitar
-    # depender del texto completo de la opción.
-    if modo_ipv6.startswith("ULA"):
-        st.caption("✅ Equivalente a 192.168.x.x en IPv6. Enrutable entre VLANs.")
-        st.caption("Ejemplo: 192.168.3.1 → **fd00:a8:3::1/64**")
-    elif modo_ipv6.startswith("Link-Local"):
-        st.caption("⚠️ Solo funciona dentro del mismo segmento. No cruza VLANs.")
-        st.caption("Ejemplo: fe80::1/64 por interfaz")
-    else:
-        st.caption("ℹ️ Los scripts no incluirán ninguna configuración IPv6.")
- 
-    st.divider()
-    st.caption("🌐 Base de red fija: **192.168.x.1**")  # Recordatorio visual, no editable
- 
- 
-# -----------------------------------------------------------------------------
-# CONTROLES PRINCIPALES — Área central de la app
-# -----------------------------------------------------------------------------
-# st.columns(3) divide el área en 3 columnas iguales para poner los inputs lado a lado.
-c_a, c_b, c_c = st.columns(3)
- 
-# Cantidad de equipos a configurar. Determina cuántas filas genera el loop de redes.
-# Parámetros: (etiqueta, valor_mínimo, valor_máximo, valor_por_defecto)
-num_equipos = c_a.number_input("N° de Equipos / Segmentos", 1, SEGMENTOS_MAX, 3)
- 
-# Prefijo del hostname. Se combina con el número de equipo: "CORE-SW-01", "CORE-SW-02"...
-host_base = c_b.text_input("Prefijo Hostname", "CORE-SW")
- 
-# VLAN inicial. Las siguientes VLANs se incrementan de 10 en 10.
-# Ejemplo con valor 100: VLAN 100, 110, 120, 130...
-vlan_start = c_c.number_input("VLAN ID Inicial", VLAN_ID_MIN, VLAN_ID_MAX, 100, step=10)
- 
- 
-# -----------------------------------------------------------------------------
-# CÁLCULO AUTOMÁTICO DE REDES
-# -----------------------------------------------------------------------------
-# Este loop construye la lista "red_data" con un diccionario por cada equipo.
-# Cada diccionario contiene todos los datos de red de ese equipo.
- 
-red_data = []  # Lista vacía que se llenará con un dict por equipo
- 
-for i in range(num_equipos):
-    # i empieza en 0, pero los segmentos empiezan en 1.
-    # Equipo 1 → 192.168.1.x, Equipo 2 → 192.168.2.x, etc.
-    tercer_octeto = i + 1
- 
-    # Construir la IP del gateway: siempre termina en .1 (el primer host de la subred)
-    gw = f"{IP_BASE_1}.{IP_BASE_2}.{tercer_octeto}.1"
- 
-    # Calcular el ID de VLAN: incrementa de 10 en 10 desde el valor inicial
-    # Ejemplo con vlan_start=100: 100, 110, 120, 130...
-    vlan = vlan_start + (i * 10)
- 
-    # Generar la dirección IPv6 según el modo elegido en el sidebar
-    # Puede devolver None si el modo es "Sin IPv6"
-    ipv6 = generar_ipv6(gw, modo_ipv6)
- 
-    # Agregar el equipo a la lista con todos sus datos
-    red_data.append({
-        # zfill(2) agrega un cero a la izquierda si el número tiene un solo dígito
-        # Ejemplo: 1 → "01", 10 → "10"
-        "Equipo":       f"{host_base}-{str(i+1).zfill(2)}",
-        "Segmento":     f"Segmento {i+1}",
-        "VLAN":          vlan,
-        "Nombre VLAN":  f"VLAN_{vlan}",
-        "IPv4 Gateway":  gw,
-        # Si ipv6 es None (modo sin IPv6), mostrar "— (sin IPv6)" en la tabla
-        "IPv6 Gateway":  ipv6 if ipv6 else "— (sin IPv6)",
-    })
- 
-# Convertir la lista de diccionarios en un DataFrame de pandas para mostrarlo como tabla
-df_red = pd.DataFrame(red_data)
- 
- 
-# -----------------------------------------------------------------------------
-# VISUALIZACIÓN DE MÉTRICAS Y TABLA
-# -----------------------------------------------------------------------------
- 
-st.subheader("🌐 Gateways Asignados Automáticamente")
- 
-# Crear hasta 4 columnas para las tarjetas de métrica.
-# min() evita crear más columnas que equipos (si hay solo 2, no crear 4 columnas vacías)
-cols_gw = st.columns(min(num_equipos, 4))
- 
-for idx, r in enumerate(red_data):
-    # idx % 4 asegura que al tener más de 4 equipos, se reutilicen las columnas
-    # Ejemplo: equipos 0,1,2,3 van en cols 0,1,2,3; el equipo 4 vuelve a col 0
-    with cols_gw[idx % 4]:
-        # st.metric muestra una tarjeta con: etiqueta arriba, valor grande, delta abajo
-        st.metric(r["Equipo"], r["IPv4 Gateway"], f"VLAN {r['VLAN']}")
- 
-# Mostrar la tabla completa con todos los datos calculados
-st.table(df_red)
- 
-st.divider()
+# Protocolos disponibles por familia
+PROTOCOLOS_IPV4 = ["Ninguno", "RIP v2", "EIGRP", "BGP"]
+PROTOCOLOS_IPV6 = ["Ninguno", "RIPng", "OSPFv3", "EIGRPv6"]
  
  
 # =============================================================================
-# SECCIÓN DE SCRIPTS POR EQUIPO
+# FUNCIONES — IPv6
 # =============================================================================
  
-# Extraer la parte descriptiva del modo IPv6 para el subtítulo de la sección
-# Ejemplo: "ULA (fd00::/8) — Recomendado" → "Recomendado"
-ipv6_label = modo_ipv6.split("—")[-1].strip()
-st.subheader(f"📋 Scripts de Configuración — {num_equipos} Equipo(s) | {vendor} | IPv6: {ipv6_label}")
- 
- 
-def _ipv6_real(r: dict) -> str | None:
+def generar_ipv6(ipv4: str, modo: str) -> str | None:
     """
-    Extrae el valor IPv6 real de un dict de red_data.
+    Convierte una IPv4 en su equivalente IPv6 según el modo elegido.
  
-    El problema: red_data guarda "— (sin IPv6)" como string cuando no hay IPv6,
-    pero generar_config_equipo() espera None (no un string) para omitir las líneas.
-    Esta función hace la conversión antes de llamar a generar_config_equipo().
+    ULA:        fd00:a8:<tercer_octeto_hex>::<cuarto_octeto_hex>/64
+    Link-Local: fe80::<cuarto_octeto_hex>/64
+    Sin IPv6:   None
+    """
+    p      = ipv4.split('.')
+    tercer = int(p[2])
+    cuarto = int(p[3])
+ 
+    if modo.startswith("ULA"):
+        return f"fd00:a8:{tercer:x}::{cuarto:x}/64"
+    elif modo.startswith("Link-Local"):
+        return f"fe80::{cuarto:x}/64"
+    else:
+        return None
+ 
+ 
+# =============================================================================
+# FUNCIONES — PROTOCOLOS DE ENRUTAMIENTO IPv4
+# =============================================================================
+ 
+def cmds_routing_ipv4(vendor: str, protocolo: str, ipv4: str,
+                       as_number: int, bgp_neighbor: str) -> list:
+    """
+    Genera los comandos de enrutamiento IPv4 para el vendor y protocolo elegidos.
  
     Args:
-        r: Diccionario de un equipo de red_data
+        vendor:       "Cisco" | "Huawei" | "Fortinet"
+        protocolo:    "RIP v2" | "EIGRP" | "BGP" | "Ninguno"
+        ipv4:         IP del gateway del primer segmento (para anunciar la red)
+        as_number:    Número de AS (para EIGRP y BGP)
+        bgp_neighbor: IP del vecino BGP
  
     Returns:
-        La dirección IPv6 como string, o None si no aplica
+        Lista de comandos CLI listos para agregar al script
     """
+    cmds = []
+ 
+    # Extraer la red /24 a partir de la IP del gateway
+    # Ejemplo: 192.168.1.1 → 192.168.1.0
+    red = ".".join(ipv4.split('.')[:3]) + ".0"
+ 
+    if protocolo == "Ninguno":
+        return []
+ 
+    # ── CISCO ──────────────────────────────────────────────────────────────
+    if vendor == "Cisco":
+        if protocolo == "RIP v2":
+            cmds.extend([
+                "router rip",
+                " version 2",                   # RIP versión 2 (soporta VLSM)
+                f" network {red}",              # Anunciar esta red por RIP
+                " no auto-summary",             # Deshabilitar resumen automático
+                " exit",
+            ])
+        elif protocolo == "EIGRP":
+            cmds.extend([
+                f"router eigrp {as_number}",    # Iniciar EIGRP con el AS configurado
+                f" network {red} 0.0.0.255",    # Red + wildcard mask (/24 → 0.0.0.255)
+                " no auto-summary",
+                " exit",
+            ])
+        elif protocolo == "BGP":
+            cmds.extend([
+                f"router bgp {as_number}",      # Iniciar BGP con el AS local
+                f" neighbor {bgp_neighbor} remote-as {as_number}",  # Vecino iBGP
+                f" network {red} mask {SUBNET_MASK}",               # Red a anunciar
+                " exit",
+            ])
+ 
+    # ── HUAWEI ─────────────────────────────────────────────────────────────
+    elif vendor == "Huawei":
+        if protocolo == "RIP v2":
+            cmds.extend([
+                "rip 1",                        # Proceso RIP número 1
+                " version 2",
+                f" network {red}",
+                " undo summary",                # Huawei usa "undo" en lugar de "no"
+                " quit",
+            ])
+        elif protocolo == "EIGRP":
+            # Huawei no soporta EIGRP nativo (es propietario de Cisco).
+            # Se usa como comentario informativo en el script generado.
+            cmds.extend([
+                "# NOTA: EIGRP es protocolo propietario de Cisco.",
+                "# En Huawei usar OSPF como alternativa equivalente:",
+                "ospf 1",
+                f" area 0",
+                f" network {red} 0.0.0.255",
+                " quit",
+            ])
+        elif protocolo == "BGP":
+            cmds.extend([
+                f"bgp {as_number}",
+                f" peer {bgp_neighbor} as-number {as_number}",
+                f" network {red}",
+                " quit",
+            ])
+ 
+    # ── FORTINET ───────────────────────────────────────────────────────────
+    elif vendor == "Fortinet":
+        if protocolo == "RIP v2":
+            cmds.extend([
+                "config router rip",
+                "    set version 2",
+                "    config network",
+                f"        edit 1",
+                f"            set prefix {red}/24",
+                "        next",
+                "    end",
+                "end",
+            ])
+        elif protocolo == "EIGRP":
+            cmds.extend([
+                "# NOTA: EIGRP no está disponible en FortiOS.",
+                "# Alternativa recomendada: OSPF",
+                "config router ospf",
+                "    set router-id 1.1.1.1",
+                "    config ospf-interface",
+                f"        edit internal",
+                "        next",
+                "    end",
+                "end",
+            ])
+        elif protocolo == "BGP":
+            cmds.extend([
+                "config router bgp",
+                f"    set as {as_number}",
+                f"    set router-id {ipv4}",
+                "    config neighbor",
+                f"        edit {bgp_neighbor}",
+                f"            set remote-as {as_number}",
+                "        next",
+                "    end",
+                "    config network",
+                f"        edit 1",
+                f"            set prefix {red}/24",
+                "        next",
+                "    end",
+                "end",
+            ])
+ 
+    return cmds
+ 
+ 
+# =============================================================================
+# FUNCIONES — PROTOCOLOS DE ENRUTAMIENTO IPv6
+# =============================================================================
+ 
+def cmds_routing_ipv6(vendor: str, protocolo: str, ipv6: str | None,
+                       as_number: int, ospf_router_id: str) -> list:
+    """
+    Genera los comandos de enrutamiento IPv6.
+ 
+    Args:
+        vendor:        "Cisco" | "Huawei" | "Fortinet"
+        protocolo:     "RIPng" | "OSPFv3" | "EIGRPv6" | "Ninguno"
+        ipv6:          Dirección IPv6 del gateway (puede ser None)
+        as_number:     Número de AS para EIGRPv6
+        ospf_router_id: Router-ID para OSPFv3 (debe ser IPv4 aunque sea OSPFv3)
+ 
+    Returns:
+        Lista de comandos CLI
+    """
+    cmds = []
+ 
+    # Si no hay IPv6 configurado, no tiene sentido generar comandos de routing IPv6
+    if protocolo == "Ninguno" or ipv6 is None:
+        return []
+ 
+    # Extraer solo la dirección sin el prefijo "/64"
+    addr = ipv6.split('/')[0]
+ 
+    # ── CISCO ──────────────────────────────────────────────────────────────
+    if vendor == "Cisco":
+        if protocolo == "RIPng":
+            cmds.extend([
+                "ipv6 unicast-routing",         # Habilitar enrutamiento IPv6 globalmente
+                "ipv6 router rip RIPNG_PROC",   # Crear proceso RIPng con nombre
+                " exit",
+                # La activación por interfaz se hace en la sección de interfaces
+                "# NOTA: Activar RIPng en cada interfaz con:",
+                "#   interface vlan X → ipv6 rip RIPNG_PROC enable",
+            ])
+        elif protocolo == "OSPFv3":
+            cmds.extend([
+                "ipv6 unicast-routing",
+                f"ipv6 router ospf 1",
+                f" router-id {ospf_router_id}",  # Router-ID en formato IPv4
+                " exit",
+                "# NOTA: Activar OSPFv3 en cada interfaz con:",
+                "#   interface vlan X → ipv6 ospf 1 area 0",
+            ])
+        elif protocolo == "EIGRPv6":
+            cmds.extend([
+                "ipv6 unicast-routing",
+                f"ipv6 router eigrp {as_number}",
+                f" eigrp router-id {ospf_router_id}",
+                " no shutdown",
+                " exit",
+                "# NOTA: Activar EIGRPv6 en cada interfaz con:",
+                "#   interface vlan X → ipv6 eigrp {as_number}",
+            ])
+ 
+    # ── HUAWEI ─────────────────────────────────────────────────────────────
+    elif vendor == "Huawei":
+        if protocolo == "RIPng":
+            cmds.extend([
+                "ripng 1",                      # Proceso RIPng número 1
+                " quit",
+                "# NOTA: Activar en interfaz con:",
+                "#   interface Vlanif X → ripng 1 enable",
+            ])
+        elif protocolo == "OSPFv3":
+            cmds.extend([
+                f"ospfv3 1",
+                f" router-id {ospf_router_id}",
+                " quit",
+                "# NOTA: Activar en interfaz con:",
+                "#   interface Vlanif X → ospfv3 1 area 0",
+            ])
+        elif protocolo == "EIGRPv6":
+            cmds.extend([
+                "# NOTA: EIGRPv6 es propietario de Cisco. En Huawei usar OSPFv3:",
+                f"ospfv3 1",
+                f" router-id {ospf_router_id}",
+                " quit",
+            ])
+ 
+    # ── FORTINET ───────────────────────────────────────────────────────────
+    elif vendor == "Fortinet":
+        if protocolo == "RIPng":
+            cmds.extend([
+                "config router ripng",
+                "    config aggregate-address",
+                "    end",
+                "    config redistribute",
+                "        edit connected",
+                "            set status enable",
+                "        next",
+                "    end",
+                "end",
+            ])
+        elif protocolo == "OSPFv3":
+            cmds.extend([
+                "config router ospf6",
+                f"    set router-id {ospf_router_id}",
+                "    config area",
+                "        edit 0.0.0.0",
+                "        next",
+                "    end",
+                "end",
+            ])
+        elif protocolo == "EIGRPv6":
+            cmds.extend([
+                "# NOTA: EIGRPv6 no está disponible en FortiOS.",
+                "# Alternativa recomendada: OSPFv3",
+                "config router ospf6",
+                f"    set router-id {ospf_router_id}",
+                "end",
+            ])
+ 
+    return cmds
+ 
+ 
+# =============================================================================
+# FUNCIONES — VLAN ADMINISTRATIVA + SSH
+# =============================================================================
+ 
+def cmds_vlan_admin(vendor: str, vlan_admin: int, ip_admin: str,
+                     host: str) -> list:
+    """
+    Genera la configuración de la VLAN administrativa con acceso SSH.
+ 
+    Esta VLAN es exclusiva para gestión del equipo (no transporta tráfico
+    de usuarios). Solo el administrador puede conectarse por SSH al equipo
+    a través de la IP asignada a esta VLAN.
+ 
+    Args:
+        vendor:    "Cisco" | "Huawei" | "Fortinet"
+        vlan_admin: ID de la VLAN administrativa (la primera VLAN del rango)
+        ip_admin:  IP del gateway de gestión (192.168.X.1)
+        host:      Hostname del equipo
+ 
+    Returns:
+        Lista de comandos CLI
+    """
+    cmds = []
+ 
+    # ── CISCO ──────────────────────────────────────────────────────────────
+    if vendor == "Cisco":
+        cmds.extend([
+            "# ── VLAN ADMINISTRATIVA + SSH ──",
+            f"vlan {vlan_admin}",
+            " name VLAN_ADMIN_MGMT",            # Nombre descriptivo
+            " exit",
+            f"interface vlan {vlan_admin}",
+            f" ip address {ip_admin} {SUBNET_MASK}",
+            " no shutdown",
+            " exit",
+ 
+            # Generar claves RSA para SSH (mínimo 1024 bits para SSH v2)
+            "crypto key generate rsa modulus 2048",
+ 
+            # Forzar SSH versión 2 (más seguro que v1)
+            "ip ssh version 2",
+            "ip ssh time-out 60",               # Timeout de sesión: 60 segundos
+            "ip ssh authentication-retries 3",   # Máximo 3 intentos de login
+ 
+            # Crear usuario local con privilegio máximo (nivel 15)
+            f"username {SSH_USER} privilege 15 secret {SSH_PASS}",
+ 
+            # Configurar las líneas VTY (terminales virtuales = sesiones SSH/Telnet)
+            # "line vty 0 4" = hasta 5 sesiones simultáneas (0,1,2,3,4)
+            "line vty 0 4",
+            " transport input ssh",             # Solo permitir SSH, bloquear Telnet
+            " login local",                     # Autenticar con usuarios locales
+            " exec-timeout 10 0",               # Cerrar sesión inactiva tras 10 min
+            " exit",
+        ])
+ 
+    # ── HUAWEI ─────────────────────────────────────────────────────────────
+    elif vendor == "Huawei":
+        cmds.extend([
+            "# ── VLAN ADMINISTRATIVA + SSH ──",
+            f"vlan {vlan_admin}",
+            f" description VLAN_ADMIN_MGMT",
+            " quit",
+            f"interface Vlanif{vlan_admin}",
+            f" ip address {ip_admin} {SUBNET_MASK}",
+            " quit",
+ 
+            # Generar par de claves RSA para SSH
+            "rsa local-key-pair create",
+            "2048",                             # Tamaño de clave en bits
+ 
+            # Habilitar el servicio SSH en el sistema
+            "stelnet server enable",
+ 
+            # Crear usuario con nivel de acceso 15 (administrador)
+            f"aaa",
+            f" local-user {SSH_USER} password irreversible-cipher {SSH_PASS}",
+            f" local-user {SSH_USER} service-type ssh",
+            f" local-user {SSH_USER} privilege level 15",
+            " quit",
+ 
+            # Configurar la interfaz de usuario para SSH
+            "user-interface vty 0 4",
+            " authentication-mode aaa",         # Usar autenticación AAA (usuarios locales)
+            " protocol inbound ssh",            # Solo SSH, no Telnet
+            " idle-timeout 10 0",               # Timeout de inactividad: 10 minutos
+            " quit",
+        ])
+ 
+    # ── FORTINET ───────────────────────────────────────────────────────────
+    elif vendor == "Fortinet":
+        cmds.extend([
+            "# ── VLAN ADMINISTRATIVA + SSH ──",
+            "config system interface",
+            f"    edit vlan{vlan_admin}",
+            "        set vdom root",
+            f"        set ip {ip_admin} {SUBNET_MASK}",
+            f"        set vlanid {vlan_admin}",
+            "        set interface internal",
+            "        set allowaccess ssh",      # Permitir SSH en esta interfaz
+            "    next",
+            "end",
+ 
+            # Crear administrador con acceso SSH
+            "config system admin",
+            f"    edit {SSH_USER}",
+            f"        set password {SSH_PASS}",
+            "        set accprofile super_admin",  # Perfil de administrador completo
+            "        set vdom root",
+            "    next",
+            "end",
+ 
+            # Asegurar que SSH esté habilitado globalmente
+            "config system global",
+            "    set admin-ssh-port 22",
+            "end",
+        ])
+ 
+    return cmds
+ 
+ 
+# =============================================================================
+# FUNCIONES — CONFIGURACIÓN DE SWITCH (VLAN + DHCP + ROUTING)
+# =============================================================================
+ 
+def generar_config_equipo(vendor: str, vlan: int, nombre: str,
+                           ipv4: str, ipv6: str | None, host: str,
+                           proto_v4: str, proto_v6: str,
+                           as_number: int, bgp_neighbor: str,
+                           ospf_router_id: str,
+                           vlan_admin: int, ip_admin: str) -> tuple:
+    """
+    Genera los comandos de deploy y rollback completos para un switch/equipo.
+ 
+    Incluye: VLAN admin + SSH, VLANs de datos, DHCP, protocolos de enrutamiento.
+ 
+    Args:
+        vendor:        "Cisco" | "Huawei" | "Fortinet"
+        vlan:          ID de la VLAN de datos
+        nombre:        Nombre de la VLAN de datos
+        ipv4:          IP gateway de la VLAN de datos
+        ipv6:          IP IPv6 del gateway (o None)
+        host:          Hostname del equipo
+        proto_v4:      Protocolo IPv4: "RIP v2" | "EIGRP" | "BGP" | "Ninguno"
+        proto_v6:      Protocolo IPv6: "RIPng" | "OSPFv3" | "EIGRPv6" | "Ninguno"
+        as_number:     Número de AS para EIGRP/BGP/EIGRPv6
+        bgp_neighbor:  IP vecino BGP
+        ospf_router_id: Router-ID para OSPFv3 (formato IPv4)
+        vlan_admin:    ID de la VLAN administrativa
+        ip_admin:      IP de gestión SSH
+ 
+    Returns:
+        (deploy, rollback): tupla de listas de comandos
+    """
+    dep, rb = [], []
+ 
+    # ── CISCO ──────────────────────────────────────────────────────────────
+    if vendor == "Cisco":
+        dep.extend([
+            "enable",
+            "configure terminal",
+            f"hostname {host}",
+            f"ip dhcp excluded-address {IP_BASE_1}.{IP_BASE_2}.0.1 "
+            f"{IP_BASE_1}.{IP_BASE_2}.0.10",
+        ])
+ 
+        # VLAN administrativa con SSH
+        dep.extend(cmds_vlan_admin(vendor, vlan_admin, ip_admin, host))
+ 
+        # VLAN de datos
+        dep.extend([
+            f"vlan {vlan}",
+            f" name {nombre}",
+            " exit",
+            f"interface vlan {vlan}",
+            f" ip address {ipv4} {SUBNET_MASK}",
+        ])
+        if ipv6:
+            dep.append(f" ipv6 address {ipv6.split('/')[0]}/64")
+        dep.extend([
+            " no shutdown",
+            " exit",
+            f"ip dhcp pool POOL_{vlan}",
+            f" network {'.'.join(ipv4.split('.')[:3])}.0 {SUBNET_MASK}",
+            f" default-router {ipv4}",
+            f" dns-server {DNS_PRIMARIO}",
+            " exit",
+        ])
+ 
+        # Protocolos de enrutamiento
+        dep.extend(cmds_routing_ipv4(vendor, proto_v4, ipv4, as_number, bgp_neighbor))
+        dep.extend(cmds_routing_ipv6(vendor, proto_v6, ipv6, as_number, ospf_router_id))
+ 
+        dep.extend(["end", "write memory"])
+ 
+        rb.extend([
+            "enable", "configure terminal",
+            f"no ip dhcp pool POOL_{vlan}",
+            f"no interface vlan {vlan}",
+            f"no vlan {vlan}",
+            f"no interface vlan {vlan_admin}",
+            f"no vlan {vlan_admin}",
+            "no crypto key zeroize rsa",
+            "end", "write memory",
+        ])
+ 
+    # ── HUAWEI ─────────────────────────────────────────────────────────────
+    elif vendor == "Huawei":
+        dep.extend(["system-view", f"sysname {host}"])
+        if ipv6:
+            dep.append("ipv6")
+        dep.append("dhcp enable")
+ 
+        # VLAN administrativa con SSH
+        dep.extend(cmds_vlan_admin(vendor, vlan_admin, ip_admin, host))
+ 
+        # VLAN de datos
+        dep.extend([
+            f"vlan {vlan}",
+            f" description {nombre}",
+            " quit",
+            f"interface Vlanif{vlan}",
+            f" ip address {ipv4} {SUBNET_MASK}",
+        ])
+        if ipv6:
+            dep.append(f" ipv6 address {ipv6.replace('/64', ' 64')}")
+        dep.extend([
+            " dhcp select interface",
+            " quit",
+        ])
+ 
+        # Protocolos de enrutamiento
+        dep.extend(cmds_routing_ipv4(vendor, proto_v4, ipv4, as_number, bgp_neighbor))
+        dep.extend(cmds_routing_ipv6(vendor, proto_v6, ipv6, as_number, ospf_router_id))
+ 
+        dep.extend(["return", "save", "y"])
+ 
+        rb.extend([
+            "system-view",
+            f"undo interface Vlanif{vlan}",
+            f"undo vlan {vlan}",
+            f"undo interface Vlanif{vlan_admin}",
+            f"undo vlan {vlan_admin}",
+            "return", "save", "y",
+        ])
+ 
+    # ── FORTINET ───────────────────────────────────────────────────────────
+    elif vendor == "Fortinet":
+        dep.extend([
+            "config system global",
+            f"    set hostname {host}",
+            "end",
+        ])
+ 
+        # VLAN administrativa con SSH
+        dep.extend(cmds_vlan_admin(vendor, vlan_admin, ip_admin, host))
+ 
+        # VLAN de datos
+        dep.extend([
+            "config system interface",
+            f"    edit vlan{vlan}",
+            "        set vdom root",
+            f"        set ip {ipv4} {SUBNET_MASK}",
+            f"        set vlanid {vlan}",
+            "        set interface internal",
+        ])
+        if ipv6:
+            dep.extend([
+                "        config ipv6",
+                f"            set ip6-address {ipv6}",
+                "        end",
+            ])
+        dep.extend(["    next", "end"])
+ 
+        # Protocolos de enrutamiento
+        dep.extend(cmds_routing_ipv4(vendor, proto_v4, ipv4, as_number, bgp_neighbor))
+        dep.extend(cmds_routing_ipv6(vendor, proto_v6, ipv6, as_number, ospf_router_id))
+ 
+        rb.extend([
+            "config system interface",
+            f"    delete vlan{vlan}",
+            f"    delete vlan{vlan_admin}",
+            "end",
+        ])
+ 
+    return dep, rb
+ 
+ 
+# =============================================================================
+# FUNCIONES — CONFIGURACIÓN DE FIREWALL
+# =============================================================================
+ 
+def generar_config_firewall(vendor_fw: str, host_fw: str,
+                             ip_wan: str, ip_lan: str,
+                             ipv6: str | None,
+                             proto_v4: str, proto_v6: str,
+                             as_number: int, bgp_neighbor: str,
+                             ospf_router_id: str) -> tuple:
+    """
+    Genera la configuración de firewall para Cisco ASA, Huawei USG o Fortinet FGT.
+ 
+    Incluye: hostname, interfaces WAN/LAN, NAT básico, política de acceso,
+             SSH de gestión y protocolos de enrutamiento.
+ 
+    Args:
+        vendor_fw:     "Cisco ASA" | "Huawei USG" | "Fortinet FGT"
+        host_fw:       Hostname del firewall
+        ip_wan:        IP de la interfaz WAN (hacia Internet/proveedor)
+        ip_lan:        IP de la interfaz LAN (hacia la red interna)
+        ipv6:          Dirección IPv6 para la interfaz LAN (o None)
+        proto_v4:      Protocolo de enrutamiento IPv4
+        proto_v6:      Protocolo de enrutamiento IPv6
+        as_number:     AS para EIGRP/BGP
+        bgp_neighbor:  IP vecino BGP
+        ospf_router_id: Router-ID OSPFv3
+ 
+    Returns:
+        (deploy, rollback): tupla de listas de comandos
+    """
+    dep, rb = [], []
+ 
+    # ── CISCO ASA ──────────────────────────────────────────────────────────
+    if vendor_fw == "Cisco ASA":
+        dep.extend([
+            "enable",
+            "configure terminal",
+            f"hostname {host_fw}",
+ 
+            "# ── Interfaces ──",
+            # Interfaz WAN (outside) — nivel de seguridad 0 = menos confiable
+            "interface GigabitEthernet0/0",
+            " nameif outside",
+            " security-level 0",
+            f" ip address {ip_wan} {SUBNET_MASK}",
+            " no shutdown",
+            " exit",
+ 
+            # Interfaz LAN (inside) — nivel de seguridad 100 = más confiable
+            "interface GigabitEthernet0/1",
+            " nameif inside",
+            " security-level 100",
+            f" ip address {ip_lan} {SUBNET_MASK}",
+            " no shutdown",
+            " exit",
+ 
+            "# ── NAT dinámico (PAT) ──",
+            # Crear objeto de red para toda la red interna
+            "object network LAN_NET",
+            f" subnet {'.'.join(ip_lan.split('.')[:3])}.0 {SUBNET_MASK}",
+            # NAT dinámico: toda la LAN sale con la IP WAN
+            " nat (inside,outside) dynamic interface",
+            " exit",
+ 
+            "# ── Política de acceso ──",
+            # Permitir tráfico de inside hacia outside
+            "access-list INSIDE_OUT extended permit ip any any",
+            "access-group INSIDE_OUT in interface inside",
+ 
+            "# ── SSH de gestión ──",
+            "crypto key generate rsa modulus 2048",
+            "ip ssh version 2",
+            f"username {SSH_USER} privilege 15 password {SSH_PASS}",
+            # Permitir SSH solo desde la red interna
+            f"ssh {'.'.join(ip_lan.split('.')[:3])}.0 255.255.255.0 inside",
+            "ssh timeout 10",
+            "aaa authentication ssh console LOCAL",
+ 
+            "# ── Ruta por defecto hacia WAN ──",
+            "route outside 0.0.0.0 0.0.0.0 " + ".".join(ip_wan.split('.')[:3]) + ".254 1",
+        ])
+ 
+        # IPv6 en ASA
+        if ipv6:
+            dep.extend([
+                "# ── IPv6 ──",
+                "ipv6 unicast-routing",
+                "interface GigabitEthernet0/1",
+                f" ipv6 address {ipv6}",
+                " ipv6 enable",
+                " exit",
+            ])
+ 
+        # Protocolos de enrutamiento
+        dep.extend(cmds_routing_ipv4("Cisco", proto_v4, ip_lan, as_number, bgp_neighbor))
+        dep.extend(cmds_routing_ipv6("Cisco", proto_v6, ipv6, as_number, ospf_router_id))
+        dep.extend(["end", "write memory"])
+ 
+        rb.extend([
+            "enable", "configure terminal",
+            "no interface GigabitEthernet0/0",
+            "no interface GigabitEthernet0/1",
+            "no object network LAN_NET",
+            "no access-list INSIDE_OUT",
+            "no crypto key zeroize rsa",
+            "end", "write memory",
+        ])
+ 
+    # ── HUAWEI USG ─────────────────────────────────────────────────────────
+    elif vendor_fw == "Huawei USG":
+        dep.extend([
+            "system-view",
+            f"sysname {host_fw}",
+ 
+            "# ── Zonas de seguridad ──",
+            # En Huawei USG la seguridad se organiza por zonas
+            "firewall zone untrust",            # Zona WAN = no confiable
+            " set priority 5",
+            " quit",
+            "firewall zone trust",              # Zona LAN = confiable
+            " set priority 85",
+            " quit",
+ 
+            "# ── Interfaces ──",
+            "interface GigabitEthernet0/0/0",
+            f" ip address {ip_wan} {SUBNET_MASK}",
+            " alias WAN",
+            " quit",
+            "firewall zone untrust",
+            " add interface GigabitEthernet0/0/0",  # Asignar interfaz a zona WAN
+            " quit",
+ 
+            "interface GigabitEthernet0/0/1",
+            f" ip address {ip_lan} {SUBNET_MASK}",
+            " alias LAN",
+            " quit",
+            "firewall zone trust",
+            " add interface GigabitEthernet0/0/1",  # Asignar interfaz a zona LAN
+            " quit",
+ 
+            "# ── NAT ──",
+            # Crear pool NAT con la IP WAN
+            f"nat address-group 1 {ip_wan} {ip_wan}",
+            # Política NAT: LAN → WAN con PAT
+            "nat-policy interzone trust untrust outbound",
+            " policy 1",
+            "  action source-nat",
+            f"  address-group 1",
+            " quit",
+            " quit",
+ 
+            "# ── Política de seguridad (permitir LAN → WAN) ──",
+            "policy interzone trust untrust outbound",
+            " policy 1",
+            "  action permit",
+            " quit",
+            " quit",
+ 
+            "# ── SSH de gestión ──",
+            "rsa local-key-pair create",
+            "2048",
+            "stelnet server enable",
+            "aaa",
+            f" local-user {SSH_USER} password irreversible-cipher {SSH_PASS}",
+            f" local-user {SSH_USER} service-type ssh",
+            f" local-user {SSH_USER} privilege level 15",
+            " quit",
+            "user-interface vty 0 4",
+            " authentication-mode aaa",
+            " protocol inbound ssh",
+            " quit",
+        ])
+ 
+        if ipv6:
+            dep.extend([
+                "# ── IPv6 ──",
+                "ipv6",
+                "interface GigabitEthernet0/0/1",
+                f" ipv6 address {ipv6.replace('/64', ' 64')}",
+                " quit",
+            ])
+ 
+        dep.extend(cmds_routing_ipv4("Huawei", proto_v4, ip_lan, as_number, bgp_neighbor))
+        dep.extend(cmds_routing_ipv6("Huawei", proto_v6, ipv6, as_number, ospf_router_id))
+        dep.extend(["return", "save", "y"])
+ 
+        rb.extend([
+            "system-view",
+            "undo interface GigabitEthernet0/0/0",
+            "undo interface GigabitEthernet0/0/1",
+            "undo firewall zone untrust",
+            "undo firewall zone trust",
+            "return", "save", "y",
+        ])
+ 
+    # ── FORTINET FGT ───────────────────────────────────────────────────────
+    elif vendor_fw == "Fortinet FGT":
+        dep.extend([
+            "config system global",
+            f"    set hostname {host_fw}",
+            "end",
+ 
+            "# ── Interfaces ──",
+            "config system interface",
+            # Interfaz WAN
+            "    edit wan1",
+            "        set mode static",
+            f"        set ip {ip_wan} {SUBNET_MASK}",
+            "        set allowaccess ping",
+            "    next",
+            # Interfaz LAN
+            "    edit internal",
+            f"        set ip {ip_lan} {SUBNET_MASK}",
+            "        set allowaccess ping ssh",  # Permitir SSH en LAN
+        ])
+        if ipv6:
+            dep.extend([
+                "        config ipv6",
+                f"            set ip6-address {ipv6}",
+                "        end",
+            ])
+        dep.extend([
+            "    next",
+            "end",
+ 
+            "# ── Política de firewall (LAN → WAN con NAT) ──",
+            "config firewall policy",
+            "    edit 1",
+            "        set name LAN_TO_WAN",
+            "        set srcintf internal",
+            "        set dstintf wan1",
+            "        set srcaddr all",
+            "        set dstaddr all",
+            "        set action accept",
+            "        set schedule always",
+            "        set service ALL",
+            "        set nat enable",           # NAT habilitado = PAT automático
+            "    next",
+            "end",
+ 
+            "# ── SSH de gestión ──",
+            "config system admin",
+            f"    edit {SSH_USER}",
+            f"        set password {SSH_PASS}",
+            "        set accprofile super_admin",
+            "    next",
+            "end",
+            "config system global",
+            "    set admin-ssh-port 22",
+            "end",
+ 
+            "# ── Ruta por defecto ──",
+            "config router static",
+            "    edit 1",
+            "        set gateway " + ".".join(ip_wan.split('.')[:3]) + ".254",
+            "        set device wan1",
+            "    next",
+            "end",
+        ])
+ 
+        dep.extend(cmds_routing_ipv4("Fortinet", proto_v4, ip_lan, as_number, bgp_neighbor))
+        dep.extend(cmds_routing_ipv6("Fortinet", proto_v6, ipv6, as_number, ospf_router_id))
+ 
+        rb.extend([
+            "config firewall policy",
+            "    delete 1",
+            "end",
+            "config system interface",
+            "    edit wan1",
+            "        unset ip",
+            "    next",
+            "    edit internal",
+            "        unset ip",
+            "    next",
+            "end",
+        ])
+ 
+    return dep, rb
+ 
+ 
+# =============================================================================
+# HELPER — IPv6 real desde red_data
+# =============================================================================
+ 
+def _ipv6_real(r: dict) -> str | None:
+    """Devuelve None si el modo es sin IPv6, de lo contrario la dirección real."""
     v = r["IPv6 Gateway"]
     return None if v == "— (sin IPv6)" else v
  
  
-# -----------------------------------------------------------------------------
-# BOTÓN DE DESCARGA MASIVA (todos los equipos en un solo archivo)
-# -----------------------------------------------------------------------------
+# =============================================================================
+# INTERFAZ — SIDEBAR
+# =============================================================================
  
-# Construir el contenido del archivo de texto con todos los scripts
-lineas_todo = [f"CORE-NEXUS REPORT COMPLETO: {proyecto}", "=" * 50, ""]
+st.title("🛡️ CORE-NEXUS: Enterprise Network Engine")
+st.caption("Sistema de Automatización de Redes e Infraestructura de Telecomunicaciones")
  
-for r in red_data:
-    # Generar los scripts para este equipo
-    dep, rb = generar_config_equipo(
-        vendor, r["VLAN"], r["Nombre VLAN"],
-        r["IPv4 Gateway"], _ipv6_real(r), r["Equipo"]
-    )
+with st.sidebar:
+    st.header("⚙️ Configuración Maestro")
+    proyecto  = st.text_input("Nombre del Proyecto", "FIBERTEC_OP_2026")
+    vendor    = st.selectbox("Fabricante Switch/Router", ["Cisco", "Huawei", "Fortinet"])
  
-    # Agregar encabezado separador para identificar cada equipo en el archivo
-    lineas_todo.append(f"{'='*50}")
-    lineas_todo.append(f"EQUIPO: {r['Equipo']}  |  {r['IPv4 Gateway']}  |  VLAN {r['VLAN']}")
-    lineas_todo.append(f"IPv6: {r['IPv6 Gateway']}")
-    lineas_todo.append(f"{'='*50}")
+    st.divider()
+    modo_ipv6 = st.selectbox("Modo IPv6", MODOS_IPV6)
+    if modo_ipv6.startswith("ULA"):
+        st.caption("✅ Enrutable entre VLANs. Ej: 192.168.3.1 → fd00:a8:3::1/64")
+    elif modo_ipv6.startswith("Link-Local"):
+        st.caption("⚠️ Solo dentro del mismo segmento.")
+    else:
+        st.caption("ℹ️ Scripts sin configuración IPv6.")
  
-    # Agregar los comandos de deploy y rollback separados por etiqueta
-    lineas_todo.append("--- DEPLOY ---")
-    lineas_todo.extend(dep)      # extend agrega cada elemento de la lista por separado
-    lineas_todo.append("")       # Línea en blanco como separador
+    st.divider()
+    st.subheader("🔀 Protocolos de Enrutamiento")
+    proto_v4 = st.selectbox("IPv4", PROTOCOLOS_IPV4)
+    proto_v6 = st.selectbox("IPv6", PROTOCOLOS_IPV6,
+                             disabled=modo_ipv6.startswith("Sin"))
  
-    lineas_todo.append("--- ROLLBACK ---")
-    lineas_todo.extend(rb)
-    lineas_todo.append("")
+    # Parámetros adicionales según protocolo
+    as_number      = 65001
+    bgp_neighbor   = "192.168.0.254"
+    ospf_router_id = "1.1.1.1"
  
-# Botón que genera el archivo .txt y lo ofrece para descargar.
-# Streamlit convierte "\n".join(lineas_todo) en un archivo descargable al hacer clic.
-st.download_button(
-    label="📦 Descargar scripts de TODOS los equipos (.txt)",
-    data="\n".join(lineas_todo),               # Unir todas las líneas con salto de línea
-    file_name=f"CORE_NEXUS_{proyecto}_COMPLETO.txt",
-    mime="text/plain",
-    use_container_width=True                   # El botón ocupa todo el ancho disponible
+    if proto_v4 in ("EIGRP", "BGP") or proto_v6 == "EIGRPv6":
+        as_number = st.number_input("Número de AS", 1, 65535, 65001)
+    if proto_v4 == "BGP":
+        bgp_neighbor = st.text_input("IP Vecino BGP", "192.168.0.254")
+    if proto_v6 in ("OSPFv3", "EIGRPv6"):
+        ospf_router_id = st.text_input("Router-ID OSPFv3 (formato IPv4)", "1.1.1.1")
+ 
+    st.divider()
+    st.caption("🌐 Base de red fija: 192.168.x.1")
+    st.caption(f"🔑 Gestión SSH: {SSH_USER} / {SSH_PASS}")
+ 
+ 
+# =============================================================================
+# INTERFAZ — CONTROLES PRINCIPALES
+# =============================================================================
+ 
+c_a, c_b, c_c = st.columns(3)
+num_equipos = c_a.number_input("N° de Equipos / Segmentos", 1, SEGMENTOS_MAX, 3)
+host_base   = c_b.text_input("Prefijo Hostname", "CORE-SW")
+# VLAN desde 10, paso de 1 en 1
+vlan_start  = c_c.number_input("VLAN Inicial (datos)", VLAN_ID_MIN, VLAN_ID_MAX, 10, step=1)
+ 
+ 
+# =============================================================================
+# CÁLCULO AUTOMÁTICO DE REDES
+# =============================================================================
+ 
+# La VLAN administrativa es siempre la anterior a vlan_start.
+# Si vlan_start=10, la admin es la VLAN 10 y los datos empiezan en 11.
+# Para evitar confusión, la admin usa un segmento de red propio (octeto 0).
+vlan_admin = vlan_start              # Primera VLAN = administrativa
+ip_admin   = f"{IP_BASE_1}.{IP_BASE_2}.0.1"  # IP de gestión: 192.168.0.1
+ 
+st.info(
+    f"🔒 **VLAN Administrativa**: VLAN {vlan_admin} — IP gestión: {ip_admin} — "
+    f"SSH habilitado (usuario: `{SSH_USER}` / pass: `{SSH_PASS}`)"
 )
  
+# Las VLANs de datos empiezan en vlan_start + 1
+red_data = []
+for i in range(num_equipos):
+    tercer_octeto = i + 1                        # 192.168.1.x, 192.168.2.x ...
+    gw   = f"{IP_BASE_1}.{IP_BASE_2}.{tercer_octeto}.1"
+    vlan = vlan_start + 1 + i                    # Admin ocupa vlan_start; datos desde +1
+    ipv6 = generar_ipv6(gw, modo_ipv6)
+    red_data.append({
+        "Equipo":       f"{host_base}-{str(i+1).zfill(2)}",
+        "Segmento":     f"Segmento {i+1}",
+        "VLAN Datos":    vlan,
+        "Nombre VLAN":  f"VLAN_{vlan}",
+        "IPv4 Gateway":  gw,
+        "IPv6 Gateway":  ipv6 if ipv6 else "— (sin IPv6)",
+    })
+ 
+df_red = pd.DataFrame(red_data)
+ 
+ 
+# =============================================================================
+# VISUALIZACIÓN — MÉTRICAS Y TABLA
+# =============================================================================
+ 
+st.subheader("🌐 Gateways Asignados Automáticamente")
+cols_gw = st.columns(min(num_equipos, 4))
+for idx, r in enumerate(red_data):
+    with cols_gw[idx % 4]:
+        st.metric(r["Equipo"], r["IPv4 Gateway"], f"VLAN {r['VLAN Datos']}")
+ 
+st.table(df_red)
 st.divider()
  
  
-# -----------------------------------------------------------------------------
-# EXPANDERS INDIVIDUALES — Un panel desplegable por equipo
-# -----------------------------------------------------------------------------
-# Cada expander muestra el script de deploy, el rollback y el botón de descarga
-# individual para ese equipo. Por defecto están colapsados (expanded=False).
+# =============================================================================
+# PESTAÑAS PRINCIPALES: SWITCHES | FIREWALL
+# =============================================================================
  
-for r in red_data:
-    # Generar los scripts CLI para este equipo específico
-    deploy, rollback = generar_config_equipo(
-        vendor, r["VLAN"], r["Nombre VLAN"],
-        r["IPv4 Gateway"], _ipv6_real(r), r["Equipo"]
+tab_sw, tab_fw = st.tabs(["🖧 Switches / Routers", "🔥 Firewall"])
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 1 — SWITCHES / ROUTERS
+# ─────────────────────────────────────────────────────────────────────────────
+with tab_sw:
+    ipv6_label = modo_ipv6.split("—")[-1].strip()
+    st.subheader(
+        f"📋 Scripts Switch — {num_equipos} equipo(s) | {vendor} | "
+        f"IPv4: {proto_v4} | IPv6: {proto_v6} | Red: {ipv6_label}"
     )
  
-    # Convertir las listas de comandos a texto plano con saltos de línea
-    deploy_txt   = "\n".join(deploy)
-    rollback_txt = "\n".join(rollback)
- 
-    # Construir el texto completo del reporte individual para descarga
-    reporte_equipo = (
-        f"CORE-NEXUS | {proyecto}\n"
-        f"Equipo : {r['Equipo']}\n"
-        f"Gateway IPv4: {r['IPv4 Gateway']} | VLAN {r['VLAN']}\n"
-        f"Gateway IPv6: {r['IPv6 Gateway']}\n"
-        f"{'='*40}\n"
-        f"--- DEPLOY ---\n{deploy_txt}\n\n"
-        f"--- ROLLBACK ---\n{rollback_txt}\n"
-    )
- 
-    # Crear el panel desplegable. El título muestra los datos clave del equipo
-    # para identificarlo sin necesidad de abrirlo.
-    with st.expander(
-        f"🖧  {r['Equipo']}  —  {r['IPv4 Gateway']}  —  {r['IPv6 Gateway']}  —  VLAN {r['VLAN']}",
-        expanded=False  # Arranca colapsado; el usuario lo abre si le interesa
-    ):
-        # Dos pestañas dentro del expander: una para deploy, otra para rollback
-        t_dep, t_rb = st.tabs(["📄 Deploy", "⏪ Rollback"])
- 
-        with t_dep:
-            # st.code muestra el texto con fuente monoespaciada y botón de copiar
-            st.code(deploy_txt, language="bash")
- 
-        with t_rb:
-            st.warning("Ejecutar solo para revertir cambios.")  # Aviso en amarillo
-            st.code(rollback_txt, language="bash")
- 
-        # Botón de descarga individual para este equipo.
-        # IMPORTANTE: el parámetro key debe ser único por cada botón en la página.
-        # Sin key único, Streamlit lanza un error al tener múltiples botones iguales.
-        st.download_button(
-            label=f"💾 Descargar script — {r['Equipo']}",
-            data=reporte_equipo,
-            file_name=f"Config_{r['Equipo']}_{proyecto}.txt",
-            mime="text/plain",
-            key=f"dl_{r['Equipo']}"   # Clave única: "dl_CORE-SW-01", "dl_CORE-SW-02"...
+    # ── Descarga masiva de todos los switches ──
+    lineas_sw = [f"CORE-NEXUS | {proyecto} | SWITCHES", "=" * 60, ""]
+    for r in red_data:
+        dep, rb = generar_config_equipo(
+            vendor, r["VLAN Datos"], r["Nombre VLAN"],
+            r["IPv4 Gateway"], _ipv6_real(r), r["Equipo"],
+            proto_v4, proto_v6, as_number, bgp_neighbor, ospf_router_id,
+            vlan_admin, ip_admin
         )
+        lineas_sw += [
+            "=" * 60,
+            f"EQUIPO : {r['Equipo']}",
+            f"IPv4   : {r['IPv4 Gateway']} | VLAN datos: {r['VLAN Datos']}",
+            f"IPv6   : {r['IPv6 Gateway']}",
+            f"Admin  : VLAN {vlan_admin} — {ip_admin} (SSH)",
+            "=" * 60,
+            "--- DEPLOY ---", *dep, "",
+            "--- ROLLBACK ---", *rb, "",
+        ]
+ 
+    st.download_button(
+        "📦 Descargar TODOS los switches (.txt)",
+        data="\n".join(lineas_sw),
+        file_name=f"SWITCHES_{proyecto}.txt",
+        mime="text/plain",
+        use_container_width=True,
+        key="dl_all_sw"
+    )
+    st.divider()
+ 
+    # ── Expander individual por equipo ──
+    for r in red_data:
+        deploy, rollback = generar_config_equipo(
+            vendor, r["VLAN Datos"], r["Nombre VLAN"],
+            r["IPv4 Gateway"], _ipv6_real(r), r["Equipo"],
+            proto_v4, proto_v6, as_number, bgp_neighbor, ospf_router_id,
+            vlan_admin, ip_admin
+        )
+        deploy_txt   = "\n".join(deploy)
+        rollback_txt = "\n".join(rollback)
+        reporte = (
+            f"CORE-NEXUS | {proyecto}\n"
+            f"Equipo      : {r['Equipo']}\n"
+            f"IPv4 Gateway: {r['IPv4 Gateway']} | VLAN {r['VLAN Datos']}\n"
+            f"IPv6 Gateway: {r['IPv6 Gateway']}\n"
+            f"VLAN Admin  : {vlan_admin} — {ip_admin} (SSH)\n"
+            f"Proto IPv4  : {proto_v4} | Proto IPv6: {proto_v6}\n"
+            f"{'='*50}\n"
+            f"--- DEPLOY ---\n{deploy_txt}\n\n"
+            f"--- ROLLBACK ---\n{rollback_txt}\n"
+        )
+ 
+        with st.expander(
+            f"🖧 {r['Equipo']}  —  {r['IPv4 Gateway']}  —  "
+            f"VLAN {r['VLAN Datos']}  —  {r['IPv6 Gateway']}",
+            expanded=False
+        ):
+            td, tr = st.tabs(["📄 Deploy", "⏪ Rollback"])
+            with td:
+                st.code(deploy_txt, language="bash")
+            with tr:
+                st.warning("Ejecutar solo para revertir cambios.")
+                st.code(rollback_txt, language="bash")
+            st.download_button(
+                f"💾 Descargar — {r['Equipo']}",
+                data=reporte,
+                file_name=f"SW_{r['Equipo']}_{proyecto}.txt",
+                mime="text/plain",
+                key=f"dl_sw_{r['Equipo']}"
+            )
+ 
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 2 — FIREWALL (independiente de switches, soporta multi-marca)
+# ─────────────────────────────────────────────────────────────────────────────
+with tab_fw:
+    st.subheader("🔥 Configuración de Firewall")
+    st.info(
+        "Esta sección es independiente de los switches. "
+        "Puedes elegir un fabricante de firewall diferente al de los switches."
+    )
+ 
+    # Controles específicos del firewall
+    fw_col1, fw_col2, fw_col3 = st.columns(3)
+    vendor_fw = fw_col1.selectbox(
+        "Fabricante Firewall",
+        ["Cisco ASA", "Huawei USG", "Fortinet FGT"],
+        key="vendor_fw"
+    )
+    host_fw   = fw_col2.text_input("Hostname Firewall", "FW-CORE-01", key="host_fw")
+    ip_wan    = fw_col3.text_input("IP interfaz WAN", "203.0.113.1", key="ip_wan")
+ 
+    fw_col4, fw_col5 = st.columns(2)
+    ip_lan_fw = fw_col4.text_input(
+        "IP interfaz LAN (gestión)",
+        f"{IP_BASE_1}.{IP_BASE_2}.0.254",
+        key="ip_lan_fw"
+    )
+ 
+    # IPv6 para el firewall (usa el mismo modo del sidebar)
+    ipv6_fw = generar_ipv6(ip_lan_fw, modo_ipv6)
+    fw_col5.text_input(
+        "IPv6 interfaz LAN (calculado)",
+        ipv6_fw if ipv6_fw else "— (sin IPv6)",
+        disabled=True,
+        key="ipv6_fw_display"
+    )
+ 
+    # Protocolos de enrutamiento del firewall (pueden ser distintos al switch)
+    st.markdown("**Protocolos de enrutamiento del Firewall**")
+    fw_pc1, fw_pc2 = st.columns(2)
+    fw_proto_v4 = fw_pc1.selectbox("IPv4 Firewall", PROTOCOLOS_IPV4, key="fw_pv4")
+    fw_proto_v6 = fw_pc2.selectbox(
+        "IPv6 Firewall", PROTOCOLOS_IPV6,
+        disabled=modo_ipv6.startswith("Sin"),
+        key="fw_pv6"
+    )
+ 
+    fw_as      = as_number       # Reutiliza el AS configurado en el sidebar
+    fw_bgp_nb  = bgp_neighbor
+    fw_ospf_id = ospf_router_id
+ 
+    if fw_proto_v4 in ("EIGRP", "BGP"):
+        fw_as = st.number_input("AS Firewall", 1, 65535, as_number, key="fw_as")
+    if fw_proto_v4 == "BGP":
+        fw_bgp_nb = st.text_input("Vecino BGP Firewall", bgp_neighbor, key="fw_bgp")
+    if fw_proto_v6 in ("OSPFv3", "EIGRPv6"):
+        fw_ospf_id = st.text_input("Router-ID FW", ospf_router_id, key="fw_ospf")
+ 
+    # Generar scripts del firewall
+    fw_deploy, fw_rollback = generar_config_firewall(
+        vendor_fw, host_fw, ip_wan, ip_lan_fw, ipv6_fw,
+        fw_proto_v4, fw_proto_v6, fw_as, fw_bgp_nb, fw_ospf_id
+    )
+ 
+    fw_deploy_txt   = "\n".join(fw_deploy)
+    fw_rollback_txt = "\n".join(fw_rollback)
+ 
+    reporte_fw = (
+        f"CORE-NEXUS | {proyecto}\n"
+        f"Firewall    : {host_fw} ({vendor_fw})\n"
+        f"IP WAN      : {ip_wan}\n"
+        f"IP LAN      : {ip_lan_fw}\n"
+        f"Proto IPv4  : {fw_proto_v4} | Proto IPv6: {fw_proto_v6}\n"
+        f"{'='*50}\n"
+        f"--- DEPLOY ---\n{fw_deploy_txt}\n\n"
+        f"--- ROLLBACK ---\n{fw_rollback_txt}\n"
+    )
+ 
+    # Descarga del firewall
+    st.download_button(
+        f"📦 Descargar config Firewall — {host_fw} ({vendor_fw})",
+        data=reporte_fw,
+        file_name=f"FW_{host_fw}_{proyecto}.txt",
+        mime="text/plain",
+        use_container_width=True,
+        key="dl_fw_main"
+    )
+    st.divider()
+ 
+    # Vista de scripts del firewall
+    tfw_dep, tfw_rb = st.tabs(["📄 Deploy Firewall", "⏪ Rollback Firewall"])
+    with tfw_dep:
+        st.code(fw_deploy_txt, language="bash")
+    with tfw_rb:
+        st.warning("Ejecutar solo para revertir la configuración del firewall.")
+        st.code(fw_rollback_txt, language="bash")
