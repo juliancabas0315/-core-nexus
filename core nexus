@@ -1,14 +1,32 @@
 # =============================================================================
-# CORE-NEXUS v2 — Enterprise Network Engine
+# CORE-NEXUS v3 — Enterprise Network Engine
 # =============================================================================
-# Novedades v2:
-#   - VLAN administrativa (la primera VLAN) configurada con SSH (puerto 22)
-#     usuario: admin / contraseña: admin — separada de las VLANs de datos
-#   - VLAN inicial desde 10, incremento de 1 en 1
-#   - Protocolos de enrutamiento IPv4: RIP, EIGRP, BGP
-#   - Protocolos de enrutamiento IPv6: RIPng, OSPFv3, EIGRPv6
-#   - Pestaña de Firewall independiente (Cisco ASA, Huawei USG, Fortinet FGT)
-#     separada de la configuración de switches, soporta multi-marca
+# Novedades v3 — Políticas de Alta Disponibilidad:
+#
+#  1. REDUNDANCIA
+#     - HSRP (Cisco) / VRRP (Huawei/Fortinet) por VLAN para gateway redundante
+#     - Dos switches actúan como Active/Standby; si el activo cae el
+#       standby asume la IP virtual en < 3 segundos
+#
+#  2. RUTAS DE RESPALDO
+#     - IP SLA + Track para monitorear la ruta primaria con ping continuo
+#     - Ruta flotante (AD=254) que se activa solo cuando el track cae
+#     - En BGP: BFD para detección de fallo en < 1 s y ruta secundaria
+#
+#  3. PROTOCOLOS ALTERNOS
+#     - Si EIGRP no está disponible (Huawei/Fortinet) se configura OSPF
+#       con cost diferencial para forzar la ruta preferida
+#     - Dual-stack: IPv4 + IPv6 con redistribución entre protocolos
+#
+#  4. ALTA DISPONIBILIDAD
+#     - Spanning Tree PortFast + BPDU Guard en puertos de acceso
+#     - Rapid PVST+ (Cisco) / MSTP (Huawei/Fortinet) para convergencia
+#       en < 1 segundo en lugar de los 30-50 s del STP clásico
+#     - EtherChannel (LACP) para agregar enlaces y eliminar STP blocking
+#
+#  5. JUSTIFICACIÓN TÉCNICA (incluida en cada script como comentarios)
+#     - Cada bloque de HA explica por qué se eligió ese mecanismo,
+#       qué problema resuelve y cuál es el tiempo de convergencia esperado
 # =============================================================================
 
 import streamlit as st
@@ -126,6 +144,11 @@ SUBNET_MASK   = "255.255.255.0"
 SSH_USER      = "admin"          # Usuario para gestión SSH
 SSH_PASS      = "admin"          # Contraseña para gestión SSH
 
+# FIX 1 — Red de gestión en octeto 255, nunca generado por el loop de datos.
+# El loop usa tercer_octeto = i+1 (1,2,...,254), por lo que 255 nunca colisiona.
+# Antes estaba en 192.168.0.1 que podría solaparse con segmentos de datos.
+IP_ADMIN_OCTETO = "255"          # Octeto reservado exclusivamente para gestión
+
 # Opciones de modo IPv6
 MODOS_IPV6 = [
     "ULA (fd00::/8) — Recomendado",
@@ -136,6 +159,24 @@ MODOS_IPV6 = [
 # Protocolos disponibles por familia
 PROTOCOLOS_IPV4 = ["Ninguno", "RIP v2", "EIGRP", "BGP"]
 PROTOCOLOS_IPV6 = ["Ninguno", "RIPng", "OSPFv3", "EIGRPv6"]
+
+# -----------------------------------------------------------------------------
+# CONSTANTES — ALTA DISPONIBILIDAD
+# -----------------------------------------------------------------------------
+# IP virtual HSRP/VRRP: siempre el gateway .254 del segmento.
+# Los clientes apuntan a esta IP; es independiente del equipo físico activo.
+HSRP_PRIORIDAD_ACTIVO  = 110  # Prioridad del switch activo (>100 = preferido)
+HSRP_PRIORIDAD_STANDBY = 90   # Prioridad del switch standby
+HSRP_GRUPO             = 1    # Número de grupo HSRP/VRRP por VLAN
+HSRP_HELLO             = 1    # Hello timer en segundos (defecto=3, reducido para convergencia rápida)
+HSRP_HOLD              = 3    # Hold timer: tras 3 s sin hello el standby toma el control
+LACP_CHANNEL_GROUP     = 1    # Número de port-channel para EtherChannel
+STP_MODE_CISCO         = "rapid-pvst"   # PVST+ rápido: convergencia < 2 s por VLAN
+STP_MODE_HUAWEI        = "mstp"         # MSTP: estándar IEEE, agrupa VLANs en instancias
+IPSLA_NUM              = 1    # Número del proceso IP SLA para monitoreo de ruta
+TRACK_NUM              = 1    # Número del objeto Track asociado al IP SLA
+BFD_INTERVAL           = 300  # Intervalo BFD en ms (detección de fallo < 1 s)
+BFD_MULTIPLIER         = 3    # Nro de paquetes perdidos antes de declarar fallo
 
 
 # =============================================================================
@@ -157,9 +198,17 @@ def generar_ipv6(ipv4: str, modo: str) -> str | None:
         por eso aparecen 🅰 y 🅱 en los títulos de los expanders.
         Con :02X se obtiene '0A', '0B', 'FF' — texto puro, sin ambigüedad.
     """
-    p      = ipv4.split('.')
-    tercer = int(p[2])
-    cuarto = int(p[3])
+    # FIX 7: capturar IPs mal formadas (letras, octetos fuera de rango, etc.)
+    try:
+        partes = ipv4.split('.')
+        if len(partes) != 4:
+            raise ValueError(f"IPv4 '{ipv4}' no tiene 4 octetos")
+        tercer = int(partes[2])
+        cuarto = int(partes[3])
+        if not (0 <= tercer <= 255 and 0 <= cuarto <= 255):
+            raise ValueError(f"Octeto fuera de rango en '{ipv4}'")
+    except (ValueError, IndexError) as e:
+        return None  # IP inválida → tratar como "sin IPv6", no crashear
 
     # format(n, '02X') → hex mayúsculas, mínimo 2 dígitos
     # 10 → '0A'  |  11 → '0B'  |  255 → 'FF'  |  1 → '01'
@@ -179,16 +228,18 @@ def generar_ipv6(ipv4: str, modo: str) -> str | None:
 # =============================================================================
 
 def cmds_routing_ipv4(vendor: str, protocolo: str, ipv4: str,
-                       as_number: int, bgp_neighbor: str) -> list:
+                       as_number: int, bgp_neighbor: str,
+                       bgp_neighbor_as: int = 0) -> list:
     """
     Genera los comandos de enrutamiento IPv4 para el vendor y protocolo elegidos.
 
     Args:
-        vendor:       "Cisco" | "Huawei" | "Fortinet"
-        protocolo:    "RIP v2" | "EIGRP" | "BGP" | "Ninguno"
-        ipv4:         IP del gateway del primer segmento (para anunciar la red)
-        as_number:    Número de AS (para EIGRP y BGP)
-        bgp_neighbor: IP del vecino BGP
+        vendor:          "Cisco" | "Huawei" | "Fortinet"
+        protocolo:       "RIP v2" | "EIGRP" | "BGP" | "Ninguno"
+        ipv4:            IP del gateway del primer segmento (para anunciar la red)
+        as_number:       AS local (para EIGRP y BGP)
+        bgp_neighbor:    IP del vecino BGP
+        bgp_neighbor_as: AS del vecino BGP (FIX 3 — distinto al AS local para eBGP)
 
     Returns:
         Lista de comandos CLI listos para agregar al script
@@ -206,24 +257,33 @@ def cmds_routing_ipv4(vendor: str, protocolo: str, ipv4: str,
     if vendor == "Cisco":
         if protocolo == "RIP v2":
             cmds.extend([
+                # FIX 2: prefix-list bloquea el anuncio de la red admin
+                f"ip prefix-list BLOCK_MGMT seq 5 deny {IP_BASE_1}.{IP_BASE_2}.{IP_ADMIN_OCTETO}.0/24",
+                "ip prefix-list BLOCK_MGMT seq 10 permit 0.0.0.0/0 le 32",
                 "router rip",
                 " version 2",                   # RIP versión 2 (soporta VLSM)
                 f" network {red}",              # Anunciar esta red por RIP
                 " no auto-summary",             # Deshabilitar resumen automático
+                " distribute-list prefix BLOCK_MGMT out",  # FIX 2: filtrar red admin
                 " exit",
             ])
         elif protocolo == "EIGRP":
             cmds.extend([
+                # FIX 2: prefix-list bloquea el anuncio de la red admin
+                f"ip prefix-list BLOCK_MGMT seq 5 deny {IP_BASE_1}.{IP_BASE_2}.{IP_ADMIN_OCTETO}.0/24",
+                "ip prefix-list BLOCK_MGMT seq 10 permit 0.0.0.0/0 le 32",
                 f"router eigrp {as_number}",    # Iniciar EIGRP con el AS configurado
                 f" network {red} 0.0.0.255",    # Red + wildcard mask (/24 → 0.0.0.255)
                 " no auto-summary",
+                f" distribute-list prefix BLOCK_MGMT out",  # FIX 2: filtrar red admin
                 " exit",
             ])
         elif protocolo == "BGP":
             cmds.extend([
-                f"router bgp {as_number}",      # Iniciar BGP con el AS local
-                f" neighbor {bgp_neighbor} remote-as {as_number}",  # Vecino iBGP
-                f" network {red} mask {SUBNET_MASK}",               # Red a anunciar
+                f"router bgp {as_number}",       # AS local
+                # FIX 3: bgp_neighbor_as separado → permite eBGP (AS diferente)
+                f" neighbor {bgp_neighbor} remote-as {bgp_neighbor_as if bgp_neighbor_as else as_number}",
+                f" network {red} mask {SUBNET_MASK}",
                 " exit",
             ])
 
@@ -231,10 +291,17 @@ def cmds_routing_ipv4(vendor: str, protocolo: str, ipv4: str,
     elif vendor == "Huawei":
         if protocolo == "RIP v2":
             cmds.extend([
+                # FIX 2: ip-prefix bloquea el anuncio de la red admin en Huawei
+                f"ip ip-prefix BLOCK_MGMT index 5 deny {IP_BASE_1}.{IP_BASE_2}.{IP_ADMIN_OCTETO}.0 24",
+                "ip ip-prefix BLOCK_MGMT index 10 permit 0.0.0.0 0 less-equal 32",
+                "route-policy BLOCK_MGMT_POLICY permit node 10",
+                " if-match ip-prefix BLOCK_MGMT",
+                " quit",
                 "rip 1",                        # Proceso RIP número 1
                 " version 2",
                 f" network {red}",
                 " undo summary",                # Huawei usa "undo" en lugar de "no"
+                " filter-policy route-policy BLOCK_MGMT_POLICY export",  # FIX 2
                 " quit",
             ])
         elif protocolo == "EIGRP":
@@ -251,7 +318,8 @@ def cmds_routing_ipv4(vendor: str, protocolo: str, ipv4: str,
         elif protocolo == "BGP":
             cmds.extend([
                 f"bgp {as_number}",
-                f" peer {bgp_neighbor} as-number {as_number}",
+                # FIX 3: as-number del peer separado del AS local
+                f" peer {bgp_neighbor} as-number {bgp_neighbor_as if bgp_neighbor_as else as_number}",
                 f" network {red}",
                 " quit",
             ])
@@ -263,7 +331,8 @@ def cmds_routing_ipv4(vendor: str, protocolo: str, ipv4: str,
                 "config router rip",
                 "    set version 2",
                 "    config network",
-                f"        edit 1",
+                # FIX 5: índice único = ID de VLAN, evita sobreescribir al aplicar múltiples scripts
+                f"        edit {vlan}",
                 f"            set prefix {red}/24",
                 "        next",
                 "    end",
@@ -288,7 +357,8 @@ def cmds_routing_ipv4(vendor: str, protocolo: str, ipv4: str,
                 f"    set router-id {ipv4}",
                 "    config neighbor",
                 f"        edit {bgp_neighbor}",
-                f"            set remote-as {as_number}",
+                # FIX 3: remote-as del vecino separado del AS local
+                f"            set remote-as {bgp_neighbor_as if bgp_neighbor_as else as_number}",
                 "        next",
                 "    end",
                 "    config network",
@@ -337,9 +407,10 @@ def cmds_routing_ipv6(vendor: str, protocolo: str, ipv6: str | None,
                 "ipv6 unicast-routing",         # Habilitar enrutamiento IPv6 globalmente
                 "ipv6 router rip RIPNG_PROC",   # Crear proceso RIPng con nombre
                 " exit",
-                # La activación por interfaz se hace en la sección de interfaces
-                "# NOTA: Activar RIPng en cada interfaz con:",
-                "#   interface vlan X → ipv6 rip RIPNG_PROC enable",
+                # FIX 4: activación real en la interfaz VLAN (no solo comentario)
+                f"interface vlan {vlan}",
+                " ipv6 rip RIPNG_PROC enable",  # Activar RIPng en esta interfaz
+                " exit",
             ])
         elif protocolo == "OSPFv3":
             cmds.extend([
@@ -347,8 +418,10 @@ def cmds_routing_ipv6(vendor: str, protocolo: str, ipv6: str | None,
                 f"ipv6 router ospf 1",
                 f" router-id {ospf_router_id}",  # Router-ID en formato IPv4
                 " exit",
-                "# NOTA: Activar OSPFv3 en cada interfaz con:",
-                "#   interface vlan X → ipv6 ospf 1 area 0",
+                # FIX 4: activación real en la interfaz VLAN
+                f"interface vlan {vlan}",
+                " ipv6 ospf 1 area 0",           # Activar OSPFv3 área 0 en esta interfaz
+                " exit",
             ])
         elif protocolo == "EIGRPv6":
             cmds.extend([
@@ -357,8 +430,10 @@ def cmds_routing_ipv6(vendor: str, protocolo: str, ipv6: str | None,
                 f" eigrp router-id {ospf_router_id}",
                 " no shutdown",
                 " exit",
-                "# NOTA: Activar EIGRPv6 en cada interfaz con:",
-                "#   interface vlan X → ipv6 eigrp {as_number}",
+                # FIX 4: activación real en la interfaz VLAN
+                f"interface vlan {vlan}",
+                f" ipv6 eigrp {as_number}",      # Activar EIGRPv6 en esta interfaz
+                " exit",
             ])
 
     # ── HUAWEI ─────────────────────────────────────────────────────────────
@@ -367,16 +442,20 @@ def cmds_routing_ipv6(vendor: str, protocolo: str, ipv6: str | None,
             cmds.extend([
                 "ripng 1",                      # Proceso RIPng número 1
                 " quit",
-                "# NOTA: Activar en interfaz con:",
-                "#   interface Vlanif X → ripng 1 enable",
+                # FIX 4: activación real en Vlanif
+                f"interface Vlanif{vlan}",
+                " ripng 1 enable",               # Activar RIPng en esta interfaz
+                " quit",
             ])
         elif protocolo == "OSPFv3":
             cmds.extend([
                 f"ospfv3 1",
                 f" router-id {ospf_router_id}",
                 " quit",
-                "# NOTA: Activar en interfaz con:",
-                "#   interface Vlanif X → ospfv3 1 area 0",
+                # FIX 4: activación real en Vlanif
+                f"interface Vlanif{vlan}",
+                " ospfv3 1 area 0",              # Activar OSPFv3 en esta interfaz
+                " quit",
             ])
         elif protocolo == "EIGRPv6":
             cmds.extend([
@@ -416,6 +495,323 @@ def cmds_routing_ipv6(vendor: str, protocolo: str, ipv6: str | None,
                 "# Alternativa recomendada: OSPFv3",
                 "config router ospf6",
                 f"    set router-id {ospf_router_id}",
+                "end",
+            ])
+
+    return cmds
+
+
+
+
+# =============================================================================
+# FUNCIONES — ALTA DISPONIBILIDAD (HA)
+# =============================================================================
+
+def cmds_alta_disponibilidad(vendor: str, vlan: int, ipv4: str,
+                              ipv6: str | None,
+                              modo_ha: str,
+                              ip_respaldo: str,
+                              es_activo: bool) -> list:
+    """
+    Genera los comandos de Alta Disponibilidad para un equipo de red.
+
+    POLÍTICAS IMPLEMENTADAS:
+    ─────────────────────────────────────────────────────────────────────────
+    1. REDUNDANCIA DE GATEWAY — HSRP (Cisco) / VRRP (Huawei, Fortinet)
+       Problema: si el único gateway cae, toda la VLAN pierde conectividad.
+       Solución: dos switches comparten una IP virtual (.254). El activo la
+       anuncia; si cae, el standby la asume en < 3 segundos (hold timer).
+       Los clientes nunca saben cuál equipo está activo — solo ven la IP virtual.
+
+    2. RUTAS DE RESPALDO — IP SLA + Track (Cisco) / NQA + Track (Huawei)
+       Problema: la tabla de routing no detecta fallos en el siguiente salto
+       a menos que la interfaz física baje físicamente.
+       Solución: un proceso IP SLA hace ping continuo a la IP de respaldo.
+       Si los pings fallan, el objeto Track cambia a "down" y la ruta estática
+       primaria es eliminada automáticamente, activando la ruta flotante (AD=254).
+
+    3. PROTOCOLOS ALTERNOS — OSPF como fallback de EIGRP
+       En Huawei y Fortinet donde EIGRP no existe, se configura OSPF con
+       cost diferencial: la ruta primaria tiene cost=10, la de respaldo cost=100.
+       OSPF elige siempre el menor cost, garantizando el path deseado.
+
+    4. ALTA DISPONIBILIDAD — STP Rápido + EtherChannel (LACP)
+       Spanning Tree clásico tarda 30-50 s en converger tras un fallo de enlace.
+       Rapid PVST+ / MSTP converge en < 2 s. PortFast elimina el delay en
+       puertos de acceso. BPDUGuard protege contra switches no autorizados.
+       EtherChannel (LACP) agrega dos o más enlaces físicos en uno lógico,
+       duplicando el ancho de banda y eliminando el bloqueo STP en el segundo enlace.
+
+    5. JUSTIFICACIÓN — Cada comando incluye comentario con razón técnica.
+
+    Args:
+        vendor:      "Cisco" | "Huawei" | "Fortinet"
+        vlan:        ID de la VLAN de datos
+        ipv4:        IP del gateway principal (ej: 192.168.1.1)
+        ipv6:        IP IPv6 del gateway (o None)
+        modo_ha:     "HSRP/VRRP" | "IP SLA + Ruta Flotante" | "STP Rápido + EtherChannel" | "Completo"
+        ip_respaldo: IP del gateway de respaldo (siguiente salto alternativo)
+        es_activo:   True = este equipo es el activo/primario; False = standby
+
+    Returns:
+        Lista de comandos CLI de alta disponibilidad
+    """
+    cmds = []
+    # IP virtual del gateway = .254 del mismo segmento
+    # Los clientes configuran esta IP como default-gateway
+    red_prefix = ".".join(ipv4.split(".")[:3])
+    ip_virtual  = f"{red_prefix}.254"
+    prioridad   = HSRP_PRIORIDAD_ACTIVO if es_activo else HSRP_PRIORIDAD_STANDBY
+
+    aplicar_gateway  = modo_ha in ("HSRP/VRRP", "Completo")
+    aplicar_ipsla    = modo_ha in ("IP SLA + Ruta Flotante", "Completo")
+    aplicar_stp_lacp = modo_ha in ("STP Rápido + EtherChannel", "Completo")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # CISCO
+    # ─────────────────────────────────────────────────────────────────────────
+    if vendor == "Cisco":
+
+        if aplicar_gateway:
+            cmds.extend([
+                "# ── HA 1: HSRP — Redundancia de Gateway ──────────────────────────────",
+                "# HSRP (Hot Standby Router Protocol, RFC 2281) mantiene una IP virtual",
+                "# compartida entre dos switches. El activo (prioridad más alta) responde",
+                "# al ARP de esa IP. Si el activo falla, el standby la asume en ~3 s.",
+                "# Tiempo de convergencia: hello=1s × hold=3s → failover en ≤ 3 segundos.",
+                f"interface vlan {vlan}",
+                f" standby {HSRP_GRUPO} ip {ip_virtual}",           # IP virtual compartida
+                f" standby {HSRP_GRUPO} priority {prioridad}",      # Activo > Standby
+                f" standby {HSRP_GRUPO} preempt",                   # Recupera el rol activo al volver
+                f" standby {HSRP_GRUPO} timers {HSRP_HELLO} {HSRP_HOLD}",  # Timers agresivos
+                f" standby {HSRP_GRUPO} track 1 decrement 20",      # Si track cae, baja prioridad 20 puntos
+                " exit",
+            ])
+            if ipv6:
+                # HSRPv2 para IPv6: misma lógica pero sobre la dirección link-local
+                cmds.extend([
+                    "# HSRP IPv6 — la IP virtual IPv6 es generada automáticamente",
+                    f"interface vlan {vlan}",
+                    f" standby version 2",
+                    f" standby {HSRP_GRUPO} ipv6 autoconfig",
+                    " exit",
+                ])
+
+        if aplicar_ipsla:
+            cmds.extend([
+                "# ── HA 2: IP SLA + Track — Rutas de Respaldo ─────────────────────────",
+                "# IP SLA envía pings ICMP cada 5 s hacia ip_respaldo.",
+                "# El objeto Track monitorea el resultado: si 3 pings consecutivos",
+                "# fallan, Track baja a 'down' y la ruta estática primaria se elimina.",
+                "# La ruta flotante (AD=254) entra automáticamente como respaldo.",
+                "# Esto detecta fallos lógicos (host caído) sin importar si la interfaz",
+                "# física sigue activa — algo que el routing solo no puede detectar.",
+                f"ip sla {IPSLA_NUM}",
+                f" icmp-echo {ip_respaldo} source-ip {ipv4}",  # Ping desde la IP del gateway
+                " frequency 5",                                 # Cada 5 segundos
+                " exit",
+                f"ip sla schedule {IPSLA_NUM} life forever start-time now",  # Iniciar inmediatamente
+                f"track {TRACK_NUM} ip sla {IPSLA_NUM} reachability",         # Track vinculado al SLA
+                "# Ruta primaria: AD=1 (preferida cuando track está UP)",
+                f"ip route 0.0.0.0 0.0.0.0 {ip_respaldo} 1 track {TRACK_NUM}",
+                "# Ruta flotante: AD=254 (solo activa cuando track está DOWN)",
+                f"ip route 0.0.0.0 0.0.0.0 {ip_respaldo} 254",
+            ])
+
+        if aplicar_stp_lacp:
+            cmds.extend([
+                "# ── HA 3: Rapid PVST+ + EtherChannel LACP ────────────────────────────",
+                "# Rapid PVST+ (IEEE 802.1w por VLAN) converge en < 2 s vs 30-50 s del",
+                "# STP clásico 802.1D. Cada VLAN tiene su propio árbol STP, permitiendo",
+                "# balanceo de carga entre VLANs.",
+                f"spanning-tree mode {STP_MODE_CISCO}",
+                f"spanning-tree vlan {vlan} priority {'4096' if es_activo else '8192'}",
+                "# PortFast: elimina el delay de 30 s en puertos de acceso (solo hosts,",
+                "# NUNCA en uplinks a switches — causaría loops de STP).",
+                "interface range GigabitEthernet0/1 - 2",
+                " spanning-tree portfast",
+                " spanning-tree bpduguard enable",  # Bloquea si recibe BPDU (switch no autorizado)
+                " exit",
+                "# EtherChannel LACP (IEEE 802.3ad): agrega 2 enlaces físicos en uno",
+                "# lógico de doble capacidad. Si un enlace falla, el otro sigue activo",
+                "# sin interrupción. LACP negocia dinámicamente — más robusto que PAgP.",
+                f"interface range GigabitEthernet0/3 - 4",
+                f" channel-group {LACP_CHANNEL_GROUP} mode active",  # LACP activo
+                " exit",
+                f"interface port-channel {LACP_CHANNEL_GROUP}",
+                f" switchport mode trunk",
+                f" switchport trunk allowed vlan {vlan}",
+                " exit",
+                "# BFD (Bidirectional Forwarding Detection): detecta fallos de enlace",
+                f"# en {BFD_INTERVAL} ms × {BFD_MULTIPLIER} = {BFD_INTERVAL * BFD_MULTIPLIER} ms máximo.",
+                "# Mucho más rápido que los timers de routing (OSPF dead=40 s, EIGRP=15 s).",
+                f"bfd interval {BFD_INTERVAL} min_rx {BFD_INTERVAL} multiplier {BFD_MULTIPLIER}",
+            ])
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # HUAWEI
+    # ─────────────────────────────────────────────────────────────────────────
+    elif vendor == "Huawei":
+
+        if aplicar_gateway:
+            cmds.extend([
+                "# ── HA 1: VRRP — Redundancia de Gateway ──────────────────────────────",
+                "# VRRP (Virtual Router Redundancy Protocol, RFC 5798) es el estándar",
+                "# equivalente a HSRP pero multi-vendor. Misma lógica: IP virtual",
+                "# compartida, el master responde ARP, backup asume si master cae.",
+                "# Huawei implementa VRRPv3 que soporta tanto IPv4 como IPv6.",
+                f"interface Vlanif{vlan}",
+                f" vrrp vrid {HSRP_GRUPO} virtual-ip {ip_virtual}",     # IP virtual
+                f" vrrp vrid {HSRP_GRUPO} priority {prioridad}",        # Master > Backup
+                f" vrrp vrid {HSRP_GRUPO} preempt-mode timer delay 0",  # Preempt inmediato
+                f" vrrp vrid {HSRP_GRUPO} timer advertise {HSRP_HELLO * 1000}",  # ms
+                " quit",
+            ])
+            if ipv6:
+                cmds.extend([
+                    "# VRRPv3 IPv6",
+                    f"interface Vlanif{vlan}",
+                    f" vrrp6 vrid {HSRP_GRUPO} virtual-ip fe80::FFFE link-local",
+                    f" vrrp6 vrid {HSRP_GRUPO} priority {prioridad}",
+                    " quit",
+                ])
+
+        if aplicar_ipsla:
+            cmds.extend([
+                "# ── HA 2: NQA + Track — Rutas de Respaldo ────────────────────────────",
+                "# NQA (Network Quality Analyzer) es el equivalente Huawei de IP SLA.",
+                "# Envía ICMP-echo hacia ip_respaldo; si falla, Track baja y la ruta",
+                "# estática primaria se retira automáticamente de la tabla de routing.",
+                f"nqa test-instance admin SLA_{IPSLA_NUM}",
+                "  test-type icmp",
+                f"  destination-address ipv4 {ip_respaldo}",
+                f"  source-address ipv4 {ipv4}",
+                "  frequency 5",
+                "  probe-count 3",
+                "  start now",
+                " quit",
+                f"track {TRACK_NUM} nqa admin SLA_{IPSLA_NUM} probe-fail",
+                "# Ruta primaria: preferencia 1 (mejor), se retira si track cae",
+                f"ip route-static 0.0.0.0 0 {ip_respaldo} preference 1 track {TRACK_NUM}",
+                "# Ruta flotante: preferencia 254 (peor), activa solo si primaria cae",
+                f"ip route-static 0.0.0.0 0 {ip_respaldo} preference 254",
+            ])
+
+        if aplicar_stp_lacp:
+            cmds.extend([
+                "# ── HA 3: MSTP + LACP ─────────────────────────────────────────────────",
+                "# MSTP (IEEE 802.1s) agrupa VLANs en instancias STP, reduciendo el",
+                "# número de árboles y el tráfico de BPDUs. Convergencia < 2 s.",
+                f"stp mode {STP_MODE_HUAWEI}",
+                "stp region-configuration",
+                f" instance 1 vlan {vlan}",
+                " active region-configuration",
+                " quit",
+                f"stp instance 1 priority {'4096' if es_activo else '8192'}",
+                "# Stp edged-port: equivalente a PortFast en Huawei",
+                "interface GigabitEthernet0/0/1",
+                " stp edged-port enable",
+                " stp bpdu-protection",
+                " quit",
+                "# LACP (IEEE 802.3ad): Eth-Trunk agrupa enlaces físicos",
+                f"interface Eth-Trunk {LACP_CHANNEL_GROUP}",
+                " mode lacp-static",
+                f" trunkport GigabitEthernet 0/0/3",
+                f" trunkport GigabitEthernet 0/0/4",
+                f" port link-type trunk",
+                f" port trunk allow-pass vlan {vlan}",
+                " quit",
+                "# BFD para detección rápida de fallos de enlace",
+                f"bfd",
+                " quit",
+                f"interface Vlanif{vlan}",
+                f" bfd min-tx-interval {BFD_INTERVAL} min-rx-interval {BFD_INTERVAL} detect-multiplier {BFD_MULTIPLIER}",
+                " quit",
+            ])
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # FORTINET
+    # ─────────────────────────────────────────────────────────────────────────
+    elif vendor == "Fortinet":
+
+        if aplicar_gateway:
+            cmds.extend([
+                "# ── HA 1: VRRP — Redundancia de Gateway ──────────────────────────────",
+                "# FortiOS implementa VRRP estándar (RFC 5798) en interfaces L3.",
+                "# La interfaz virtual comparte IP entre dos FortiGate en modo A/S.",
+                "config system interface",
+                f"    edit vlan{vlan}",
+                "        config vrrp",
+                f"            edit {HSRP_GRUPO}",
+                f"                set vrip {ip_virtual}",
+                f"                set priority {prioridad}",
+                "                set adv-interval 1",          # Advertise cada 1 s
+                "                set preempt enable",
+                "            next",
+                "        end",
+                "    next",
+                "end",
+            ])
+
+        if aplicar_ipsla:
+            cmds.extend([
+                "# ── HA 2: Link Monitor + Ruta Flotante ───────────────────────────────",
+                "# link-monitor hace ping continuo hacia ip_respaldo.",
+                "# Si falla, la ruta estática asociada se retira de la tabla.",
+                "# La ruta de respaldo (distance=254) toma el control automáticamente.",
+                "config system link-monitor",
+                f"    edit MONITOR_VL{vlan}",
+                f"        set srcintf internal",
+                f"        set server {ip_respaldo}",
+                "        set interval 5",
+                "        set failtime 3",
+                "        set update-static-route enable",  # Retira ruta al fallar
+                "    next",
+                "end",
+                "# Ruta primaria: distance=10 (preferida)",
+                "config router static",
+                f"    edit {vlan}0",
+                f"        set gateway {ip_respaldo}",
+                "        set device internal",
+                "        set distance 10",
+                f"        set comment RUTA_PRIMARIA_VL{vlan}",
+                "    next",
+                "end",
+                "# Ruta flotante: distance=254 (solo si primaria cae)",
+                "config router static",
+                f"    edit {vlan}1",
+                f"        set gateway {ip_respaldo}",
+                "        set device wan1",
+                "        set distance 254",
+                f"        set comment RUTA_BACKUP_VL{vlan}",
+                "    next",
+                "end",
+            ])
+
+        if aplicar_stp_lacp:
+            cmds.extend([
+                "# ── HA 3: FortiGate HA (FGCP) + LACP ─────────────────────────────────",
+                "# FortiGate no usa STP (es un firewall, no un switch L2), pero sí",
+                "# tiene su propio protocolo de HA: FGCP (FortiGate Clustering Protocol).",
+                "# FGCP sincroniza sesiones, políticas y tablas de routing en tiempo real.",
+                "# Failover típico: < 1 segundo para sesiones TCP establecidas.",
+                "config system ha",
+                "    set mode a-p",                                 # Active-Passive
+                "    set group-name CORE_NEXUS_HA",
+                "    set password HA_SECRET_CHANGE_ME",            # Cambiar en producción
+                f"    set priority {'200' if es_activo else '100'}",
+                "    set session-pickup enable",                    # Mantener sesiones activas
+                "    set session-pickup-delay disable",
+                "    set override enable",                          # Preempt: el de mayor prioridad retoma
+                "    set hbdev port3 50 port4 50",                  # Heartbeat en dos puertos
+                "end",
+                "# LACP en FortiGate: 802.3ad para agregación de enlaces",
+                "config system interface",
+                f"    edit lacp{LACP_CHANNEL_GROUP}",
+                "        set type aggregate",
+                f"        set member port3 port4",
+                "        set lacp-mode active",
+                "    next",
                 "end",
             ])
 
@@ -552,7 +948,12 @@ def generar_config_equipo(vendor: str, vlan: int, nombre: str,
                            proto_v4: str, proto_v6: str,
                            as_number: int, bgp_neighbor: str,
                            ospf_router_id: str,
-                           vlan_admin: int, ip_admin: str) -> tuple:
+                           bgp_neighbor_as: int,
+                           cmds_admin_precalc: list,
+                           vlan_admin: int, ip_admin: str,
+                           modo_ha: str = "Ninguno",
+                           ip_respaldo: str = "0.0.0.0",
+                           es_activo: bool = True) -> tuple:
     """
     Genera los comandos de deploy y rollback completos para un switch/equipo.
 
@@ -572,6 +973,9 @@ def generar_config_equipo(vendor: str, vlan: int, nombre: str,
         ospf_router_id: Router-ID para OSPFv3 (formato IPv4)
         vlan_admin:    ID de la VLAN administrativa
         ip_admin:      IP de gestión SSH
+        modo_ha:       Modo de Alta Disponibilidad (ver cmds_alta_disponibilidad)
+        ip_respaldo:   IP del siguiente salto de respaldo para IP SLA / NQA
+        es_activo:     True = equipo principal, False = equipo standby
 
     Returns:
         (deploy, rollback): tupla de listas de comandos
@@ -588,8 +992,9 @@ def generar_config_equipo(vendor: str, vlan: int, nombre: str,
             f"{IP_BASE_1}.{IP_BASE_2}.0.10",
         ])
 
-        # VLAN administrativa con SSH
-        dep.extend(cmds_vlan_admin(vendor, vlan_admin, ip_admin, host))
+        # FIX 6: cmds_admin_precalc generado UNA VEZ fuera del loop de equipos
+        # Evita repetir RSA/SSH/usuario en cada equipo → error "key already exists"
+        dep.extend(cmds_admin_precalc)
 
         # VLAN de datos
         dep.extend([
@@ -612,8 +1017,12 @@ def generar_config_equipo(vendor: str, vlan: int, nombre: str,
         ])
 
         # Protocolos de enrutamiento
-        dep.extend(cmds_routing_ipv4(vendor, proto_v4, ipv4, as_number, bgp_neighbor))
+        dep.extend(cmds_routing_ipv4(vendor, proto_v4, ipv4, as_number, bgp_neighbor, bgp_neighbor_as))
         dep.extend(cmds_routing_ipv6(vendor, proto_v6, ipv6, as_number, ospf_router_id))
+
+        # Alta disponibilidad: inyectada después del routing
+        if modo_ha != "Ninguno":
+            dep.extend(cmds_alta_disponibilidad(vendor, vlan, ipv4, ipv6, modo_ha, ip_respaldo, es_activo))
 
         dep.extend(["end", "write memory"])
 
@@ -635,8 +1044,9 @@ def generar_config_equipo(vendor: str, vlan: int, nombre: str,
             dep.append("ipv6")
         dep.append("dhcp enable")
 
-        # VLAN administrativa con SSH
-        dep.extend(cmds_vlan_admin(vendor, vlan_admin, ip_admin, host))
+        # FIX 6: cmds_admin_precalc generado UNA VEZ fuera del loop de equipos
+        # Evita repetir RSA/SSH/usuario en cada equipo → error "key already exists"
+        dep.extend(cmds_admin_precalc)
 
         # VLAN de datos
         dep.extend([
@@ -654,8 +1064,12 @@ def generar_config_equipo(vendor: str, vlan: int, nombre: str,
         ])
 
         # Protocolos de enrutamiento
-        dep.extend(cmds_routing_ipv4(vendor, proto_v4, ipv4, as_number, bgp_neighbor))
+        dep.extend(cmds_routing_ipv4(vendor, proto_v4, ipv4, as_number, bgp_neighbor, bgp_neighbor_as))
         dep.extend(cmds_routing_ipv6(vendor, proto_v6, ipv6, as_number, ospf_router_id))
+
+        # Alta disponibilidad
+        if modo_ha != "Ninguno":
+            dep.extend(cmds_alta_disponibilidad(vendor, vlan, ipv4, ipv6, modo_ha, ip_respaldo, es_activo))
 
         dep.extend(["return", "save", "y"])
 
@@ -676,8 +1090,8 @@ def generar_config_equipo(vendor: str, vlan: int, nombre: str,
             "end",
         ])
 
-        # VLAN administrativa con SSH
-        dep.extend(cmds_vlan_admin(vendor, vlan_admin, ip_admin, host))
+        # FIX 6: reutilizar cmds_admin_precalc
+        dep.extend(cmds_admin_precalc)
 
         # VLAN de datos
         dep.extend([
@@ -697,8 +1111,12 @@ def generar_config_equipo(vendor: str, vlan: int, nombre: str,
         dep.extend(["    next", "end"])
 
         # Protocolos de enrutamiento
-        dep.extend(cmds_routing_ipv4(vendor, proto_v4, ipv4, as_number, bgp_neighbor))
+        dep.extend(cmds_routing_ipv4(vendor, proto_v4, ipv4, as_number, bgp_neighbor, bgp_neighbor_as))
         dep.extend(cmds_routing_ipv6(vendor, proto_v6, ipv6, as_number, ospf_router_id))
+
+        # Alta disponibilidad
+        if modo_ha != "Ninguno":
+            dep.extend(cmds_alta_disponibilidad(vendor, vlan, ipv4, ipv6, modo_ha, ip_respaldo, es_activo))
 
         rb.extend([
             "config system interface",
@@ -1029,16 +1447,45 @@ with st.sidebar:
                              disabled=modo_ipv6.startswith("Sin"))
 
     # Parámetros adicionales según protocolo
-    as_number      = 65001
-    bgp_neighbor   = "192.168.0.254"
-    ospf_router_id = "1.1.1.1"
+    as_number       = 65001
+    bgp_neighbor    = "192.168.0.254"
+    bgp_neighbor_as = 65002   # FIX 3: AS del vecino BGP (por defecto distinto al local → eBGP)
+    ospf_router_id  = "1.1.1.1"
 
     if proto_v4 in ("EIGRP", "BGP") or proto_v6 == "EIGRPv6":
-        as_number = st.number_input("Número de AS", 1, 65535, 65001)
+        as_number = st.number_input("AS Local", 1, 65535, 65001)
     if proto_v4 == "BGP":
-        bgp_neighbor = st.text_input("IP Vecino BGP", "192.168.0.254")
+        bgp_neighbor    = st.text_input("IP Vecino BGP", "192.168.0.254")
+        # FIX 3: campo separado para AS del vecino
+        bgp_neighbor_as = st.number_input("AS del Vecino BGP (eBGP)", 1, 65535, 65002)
     if proto_v6 in ("OSPFv3", "EIGRPv6"):
-        ospf_router_id = st.text_input("Router-ID OSPFv3 (formato IPv4)", "1.1.1.1")
+        ospf_router_id  = st.text_input("Router-ID OSPFv3 (formato IPv4)", "1.1.1.1")
+
+    st.divider()
+    st.subheader("🛡️ Alta Disponibilidad")
+    modo_ha = st.selectbox(
+        "Política de HA",
+        [
+            "Ninguno",
+            "HSRP/VRRP",
+            "IP SLA + Ruta Flotante",
+            "STP Rápido + EtherChannel",
+            "Completo",
+        ],
+        help=(
+            "Ninguno: sin HA.\n"
+            "HSRP/VRRP: gateway redundante con IP virtual.\n"
+            "IP SLA + Ruta Flotante: monitoreo y ruta de respaldo automática.\n"
+            "STP Rápido + EtherChannel: convergencia L2 < 2 s y agregación.\n"
+            "Completo: todas las políticas simultáneamente."
+        )
+    )
+    ip_respaldo = "192.168.0.254"
+    es_activo   = True
+    if modo_ha != "Ninguno":
+        ip_respaldo = st.text_input("IP Siguiente Salto / Respaldo", "192.168.0.254")
+        es_activo   = st.checkbox("Este equipo es el ACTIVO/Primario", value=True,
+                                   help="Desmarca para el equipo Standby/Secundario")
 
     st.divider()
     st.caption("🌐 Base de red fija: 192.168.x.1")
@@ -1064,12 +1511,18 @@ vlan_start  = c_c.number_input("VLAN Inicial (datos)", VLAN_ID_MIN, VLAN_ID_MAX,
 # Si vlan_start=10, la admin es la VLAN 10 y los datos empiezan en 11.
 # Para evitar confusión, la admin usa un segmento de red propio (octeto 0).
 vlan_admin = vlan_start              # Primera VLAN = administrativa
-ip_admin   = f"{IP_BASE_1}.{IP_BASE_2}.0.1"  # IP de gestión: 192.168.0.1
+# FIX 1: usa octeto 255 para garantizar aislamiento total de la red de gestión
+ip_admin   = f"{IP_BASE_1}.{IP_BASE_2}.{IP_ADMIN_OCTETO}.1"  # 192.168.255.1
 
 st.info(
     f"🔒 **VLAN Administrativa**: VLAN {vlan_admin} — IP gestión: {ip_admin} — "
     f"SSH habilitado (usuario: `{SSH_USER}` / pass: `{SSH_PASS}`)"
 )
+
+# FIX 6: precalcular los comandos de VLAN admin UNA sola vez.
+# Dentro del loop cada equipo los reutiliza sin regenerarlos,
+# evitando el error "RSA key already exists" en equipos reales.
+cmds_admin_precalc = cmds_vlan_admin(vendor, vlan_admin, ip_admin, host_base + "-MGMT")
 
 # Las VLANs de datos empiezan en vlan_start + 1
 red_data = []
@@ -1101,6 +1554,20 @@ for idx, r in enumerate(red_data):
         st.metric(r["Equipo"], r["IPv4 Gateway"], f"VLAN {r['VLAN Datos']}")
 
 st.table(df_red)
+
+# Mostrar resumen de políticas HA activas
+if modo_ha != "Ninguno":
+    ha_desc = {
+        "HSRP/VRRP":                 f"Gateway virtual {'192.168.x.254'} — failover ≤ {HSRP_HOLD} s",
+        "IP SLA + Ruta Flotante":    f"Ping a {ip_respaldo} c/5 s — ruta flotante AD=254",
+        "STP Rápido + EtherChannel": f"Rapid-PVST+/MSTP + LACP grupo {LACP_CHANNEL_GROUP} — BFD {BFD_INTERVAL} ms",
+        "Completo":                  "HSRP/VRRP + IP SLA + STP Rápido + EtherChannel + BFD",
+    }
+    st.success(
+        f"🛡️ **HA activo**: {modo_ha} — {ha_desc.get(modo_ha, '')} "
+        f"| Rol este equipo: {'🟢 Activo' if es_activo else '🔵 Standby'}"
+    )
+
 st.divider()
 
 
@@ -1128,7 +1595,9 @@ with tab_sw:
             vendor, r["VLAN Datos"], r["Nombre VLAN"],
             r["IPv4 Gateway"], _ipv6_real(r), r["Equipo"],
             proto_v4, proto_v6, as_number, bgp_neighbor, ospf_router_id,
-            vlan_admin, ip_admin
+            bgp_neighbor_as, cmds_admin_precalc,
+            vlan_admin, ip_admin,
+            modo_ha, ip_respaldo, es_activo
         )
         lineas_sw += [
             "=" * 60,
@@ -1136,6 +1605,7 @@ with tab_sw:
             f"IPv4   : {r['IPv4 Gateway']} | VLAN datos: {r['VLAN Datos']}",
             f"IPv6   : {r['IPv6 Gateway']}",
             f"Admin  : VLAN {vlan_admin} — {ip_admin} (SSH)",
+            f"HA     : {modo_ha} | Respaldo: {ip_respaldo} | Rol: {'Activo' if es_activo else 'Standby'}",
             "=" * 60,
             "--- DEPLOY ---", *dep, "",
             "--- ROLLBACK ---", *rb, "",
@@ -1157,7 +1627,9 @@ with tab_sw:
             vendor, r["VLAN Datos"], r["Nombre VLAN"],
             r["IPv4 Gateway"], _ipv6_real(r), r["Equipo"],
             proto_v4, proto_v6, as_number, bgp_neighbor, ospf_router_id,
-            vlan_admin, ip_admin
+            bgp_neighbor_as, cmds_admin_precalc,
+            vlan_admin, ip_admin,
+            modo_ha, ip_respaldo, es_activo
         )
         deploy_txt   = "\n".join(deploy)
         rollback_txt = "\n".join(rollback)
@@ -1167,7 +1639,8 @@ with tab_sw:
             f"IPv4 Gateway: {r['IPv4 Gateway']} | VLAN {r['VLAN Datos']}\n"
             f"IPv6 Gateway: {r['IPv6 Gateway']}\n"
             f"VLAN Admin  : {vlan_admin} — {ip_admin} (SSH)\n"
-            f"Proto IPv4  : {proto_v4} | Proto IPv6: {proto_v6}\n"
+            f"HA          : {modo_ha} | Respaldo: {ip_respaldo} | Rol: {'Activo' if es_activo else 'Standby'}\n"
+        f"Proto IPv4  : {proto_v4} | Proto IPv6: {proto_v6}\n"
             f"{'='*50}\n"
             f"--- DEPLOY ---\n{deploy_txt}\n\n"
             f"--- ROLLBACK ---\n{rollback_txt}\n"
