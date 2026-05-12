@@ -1,7 +1,7 @@
 # =============================================================================
-# CORE-NEXUS v3.3 — Enterprise Network Engine
+# CORE-NEXUS v4 — Enterprise Network Engine
 # =============================================================================
-# Novedades v3.3 — Formateo de equipos previos + Políticas de HA:
+# Novedades v4 — Formateo de equipos previos + Políticas de HA:
 #
 #  1. REDUNDANCIA
 #     - HSRP (Cisco) / VRRP (Huawei/Fortinet) por VLAN para gateway redundante
@@ -38,6 +38,8 @@
 
 import streamlit as st
 import pandas as pd
+import json
+import datetime
 
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN DE PÁGINA
@@ -51,30 +53,43 @@ st.set_page_config(
 
 st.markdown("""
     <style>
-    /* ── Métricas de gateway ───────────────────────────────────────────── */
+
+    /* ══════════════════════════════════════════════════════════════════════
+       MÉTRICAS DE GATEWAY — base común (ambos modos)
+       ══════════════════════════════════════════════════════════════════════ */
     [data-testid="stMetric"] {
         padding: 15px;
         border-radius: 10px;
         border-left: 5px solid #004a99;
+        transition: box-shadow 0.2s ease;
     }
 
-    /* ── Modo CLARO ────────────────────────────────────────────────────── */
+    /* ══════════════════════════════════════════════════════════════════════
+       MODO CLARO
+       ══════════════════════════════════════════════════════════════════════ */
     @media (prefers-color-scheme: light) {
         .main { background-color: #f0f2f6; }
 
+        /* Tarjeta */
         [data-testid="stMetric"] {
             background-color: #ffffff;
             box-shadow: 0 2px 4px rgba(0,0,0,0.06);
         }
 
-        /* Texto principal en expanders y tabs */
+        /* Textos dentro de la tarjeta */
+        [data-testid="stMetric"] label,
+        [data-testid="stMetric"] [data-testid="stMetricLabel"] p,
+        [data-testid="stMetric"] [data-testid="stMetricValue"],
+        [data-testid="stMetric"] [data-testid="stMetricDelta"] {
+            color: #1a1a2e !important;
+        }
+
+        /* Expanders */
         [data-testid="stExpander"] summary p,
         [data-testid="stExpander"] summary span,
         [data-testid="stTabs"] button p {
             color: #1a1a2e !important;
         }
-
-        /* Fondo de expanders */
         [data-testid="stExpander"] {
             background-color: #ffffff;
             border: 1px solid #dce1e7;
@@ -82,31 +97,55 @@ st.markdown("""
         }
     }
 
-    /* ── Modo OSCURO ────────────────────────────────────────────────────── */
+    /* ══════════════════════════════════════════════════════════════════════
+       MODO OSCURO
+       ══════════════════════════════════════════════════════════════════════ */
     @media (prefers-color-scheme: dark) {
         .main { background-color: #0e1117; }
 
+        /* Tarjeta — fondo oscuro con borde azul brillante */
         [data-testid="stMetric"] {
-            background-color: #1e2130;
-            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-            border-left-color: #3a7bd5;
+            background-color: #1a1f2e;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+            border-left-color: #4d9fec;
         }
 
-        /* Texto de títulos en expanders — forzar blanco */
+        /* Label (nombre del equipo — texto pequeño arriba) */
+        [data-testid="stMetric"] label,
+        [data-testid="stMetric"] [data-testid="stMetricLabel"] p {
+            color: #a8b8d0 !important;   /* gris-azulado claro, legible */
+            font-size: 13px !important;
+            font-weight: 500 !important;
+            letter-spacing: 0.03em;
+        }
+
+        /* Valor principal (la IP — número grande central) */
+        [data-testid="stMetric"] [data-testid="stMetricValue"],
+        [data-testid="stMetric"] [data-testid="stMetricValue"] > div {
+            color: #e8f0fe !important;   /* blanco-azulado, muy legible */
+            font-weight: 700 !important;
+        }
+
+        /* Delta (VLAN — texto con flecha abajo) */
+        [data-testid="stMetric"] [data-testid="stMetricDelta"],
+        [data-testid="stMetric"] [data-testid="stMetricDelta"] svg {
+            color: #5bc8af !important;   /* verde-turquesa, contraste sobre oscuro */
+            fill: #5bc8af !important;
+        }
+
+        /* Expanders */
         [data-testid="stExpander"] summary p,
         [data-testid="stExpander"] summary span,
         [data-testid="stExpander"] details summary p {
             color: #e8eaf0 !important;
         }
-
-        /* Fondo de expanders en modo oscuro */
         [data-testid="stExpander"] {
             background-color: #1e2130;
             border: 1px solid #2d3250;
             border-radius: 8px;
         }
 
-        /* Tabs — texto activo e inactivo */
+        /* Tabs */
         [data-testid="stTabs"] button[aria-selected="true"] p {
             color: #ffffff !important;
             font-weight: 600;
@@ -115,26 +154,131 @@ st.markdown("""
             color: #9ba3b8 !important;
         }
 
-        /* Info/warning boxes — fondo adaptado */
+        /* Alertas */
         [data-testid="stAlert"] {
             background-color: #1e2130 !important;
         }
     }
 
-    /* ── Botones — aplica en ambos modos ───────────────────────────────── */
+    /* ══════════════════════════════════════════════════════════════════════
+       MODO OSCURO — botones, download, subheaders, captions
+       ══════════════════════════════════════════════════════════════════════ */
+    @media (prefers-color-scheme: dark) {
+
+        /* Botón de descarga (stDownloadButton) — texto blanco siempre */
+        [data-testid="stDownloadButton"] > button {
+            color: #e8f0fe !important;
+            background-color: #1e2a3a !important;
+            border: 1px solid #3a7bd5 !important;
+        }
+        [data-testid="stDownloadButton"] > button:hover {
+            background-color: #2a3a50 !important;
+            border-color: #4d9fec !important;
+        }
+        [data-testid="stDownloadButton"] > button p,
+        [data-testid="stDownloadButton"] > button span {
+            color: #e8f0fe !important;
+        }
+
+        /* Botones normales stButton — texto blanco */
+        .stButton > button {
+            color: #e8f0fe !important;
+            background-color: #1e2a3a !important;
+            border: 1px solid #3a7bd5 !important;
+        }
+        .stButton > button:hover {
+            background-color: #2a3a50 !important;
+        }
+        .stButton > button p,
+        .stButton > button span {
+            color: #e8f0fe !important;
+        }
+
+        /* Tabs — fondo de la barra de tabs */
+        [data-testid="stTabs"] {
+            background-color: transparent;
+        }
+        /* Tab activo — texto blanco con subrayado azul */
+        [data-testid="stTabs"] button[aria-selected="true"] {
+            border-bottom: 3px solid #4d9fec !important;
+        }
+        [data-testid="stTabs"] button[aria-selected="true"] p,
+        [data-testid="stTabs"] button[aria-selected="true"] span {
+            color: #ffffff !important;
+            font-weight: 700 !important;
+        }
+        /* Tab inactivo — texto gris visible */
+        [data-testid="stTabs"] button[aria-selected="false"] p,
+        [data-testid="stTabs"] button[aria-selected="false"] span {
+            color: #7a8fa8 !important;
+        }
+        [data-testid="stTabs"] button[aria-selected="false"]:hover p {
+            color: #b0c4d8 !important;
+        }
+
+        /* Subheaders y títulos de sección */
+        h1, h2, h3 {
+            color: #e8f0fe !important;
+        }
+
+        /* st.caption — texto secundario */
+        [data-testid="stCaptionContainer"] p {
+            color: #7a8fa8 !important;
+        }
+
+        /* Labels de inputs (text_input, selectbox, number_input) */
+        [data-testid="stTextInput"] label p,
+        [data-testid="stSelectbox"] label p,
+        [data-testid="stNumberInput"] label p,
+        [data-testid="stCheckbox"] label p,
+        [data-testid="stFileUploader"] label p {
+            color: #a8b8d0 !important;
+        }
+
+        /* Texto dentro de inputs */
+        [data-testid="stTextInput"] input,
+        [data-testid="stNumberInput"] input {
+            color: #e8f0fe !important;
+            background-color: #1a1f2e !important;
+        }
+
+        /* Info / warning / success / error — texto siempre legible */
+        [data-testid="stAlert"] p,
+        [data-testid="stAlert"] span {
+            color: #1a1a1a !important;
+        }
+
+        /* Tabla (st.table) */
+        [data-testid="stTable"] th {
+            color: #a8b8d0 !important;
+            background-color: #1a1f2e !important;
+        }
+        [data-testid="stTable"] td {
+            color: #e8f0fe !important;
+        }
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════
+       GLOBAL — aplica en ambos modos
+       ══════════════════════════════════════════════════════════════════════ */
     .stButton > button {
         width: 100%;
         border-radius: 6px;
         height: 3em;
         font-weight: bold;
-        transition: opacity 0.2s ease;
+        transition: opacity 0.2s ease, background-color 0.2s ease;
     }
-    .stButton > button:hover { opacity: 0.85; }
 
-    /* ── Selector de código (st.code) ──────────────────────────────────── */
-    [data-testid="stCode"] {
+    [data-testid="stDownloadButton"] > button {
+        width: 100%;
         border-radius: 6px;
+        height: 3em;
+        font-weight: bold;
+        transition: opacity 0.2s ease, background-color 0.2s ease;
     }
+
+    [data-testid="stCode"] { border-radius: 6px; }
+
     </style>
     """, unsafe_allow_html=True)
 
@@ -1881,12 +2025,198 @@ def _ipv6_real(r: dict) -> str | None:
     return None if v == "— (sin IPv6)" else v
 
 
+
+# =============================================================================
+# SISTEMA DE SESIONES DE PROYECTO
+# =============================================================================
+# Permite guardar la configuración de equipos ya procesados y continuarla
+# en otra sesión o desde otro vendor, sin cruzar datos entre grupos.
+#
+# Estructura de una sesión guardada (en st.session_state):
+#   proyecto → nombre del proyecto
+#   grupos   → lista de grupos, cada uno con:
+#       vendor, num_equipos, vlan_start, host_base,
+#       modo_ipv6, proto_v4, proto_v6, modo_ha,
+#       equipos: lista de dicts con todos los datos de cada equipo
+# =============================================================================
+
+def sesion_vacia(nombre_proyecto: str) -> dict:
+    """Devuelve una sesión nueva y vacía para el proyecto dado."""
+    return {
+        "proyecto":  nombre_proyecto,
+        "creada":    datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "grupos":    [],          # Un grupo por cada lote de equipos configurado
+    }
+
+
+def agregar_grupo_a_sesion(sesion: dict, vendor: str, red_data: list,
+                            vlan_start: int, host_base: str,
+                            modo_ipv6: str, proto_v4: str, proto_v6: str,
+                            modo_ha: str) -> dict:
+    """
+    Agrega un grupo de equipos a la sesión activa.
+
+    Cada llamada crea un grupo nuevo con su propio vendor y parámetros,
+    de modo que equipos Cisco y Huawei del mismo proyecto no se mezclan.
+    Las VLANs y segmentos IP de cada grupo son independientes.
+
+    Args:
+        sesion:    Sesión activa (dict)
+        vendor:    Fabricante de este grupo
+        red_data:  Lista de dicts de equipos calculados
+        ...        Resto de parámetros de configuración del grupo
+
+    Returns:
+        Sesión actualizada con el nuevo grupo
+    """
+    grupo = {
+        "id":         len(sesion["grupos"]) + 1,
+        "vendor":     vendor,
+        "vlan_start": vlan_start,
+        "host_base":  host_base,
+        "modo_ipv6":  modo_ipv6,
+        "proto_v4":   proto_v4,
+        "proto_v6":   proto_v6,
+        "modo_ha":    modo_ha,
+        "guardado":   datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "equipos":    [
+            {
+                "equipo":   r["Equipo"],
+                "vlan":     r["VLAN Datos"],
+                "ipv4":     r["IPv4 Gateway"],
+                "ipv6":     r["IPv6 Gateway"],
+                "segmento": r["Segmento"],
+            }
+            for r in red_data
+        ],
+    }
+    sesion["grupos"].append(grupo)
+    return sesion
+
+
+def vlans_usadas_en_sesion(sesion: dict) -> set:
+    """
+    Retorna el conjunto de todas las VLANs ya asignadas en la sesión.
+    Se usa para detectar conflictos antes de agregar un nuevo grupo.
+    """
+    vlans = set()
+    for g in sesion["grupos"]:
+        for eq in g["equipos"]:
+            vlans.add(eq["vlan"])
+    return vlans
+
+
+def ips_usadas_en_sesion(sesion: dict) -> set:
+    """
+    Retorna el conjunto de todas las IPs IPv4 gateway ya asignadas.
+    Evita que dos grupos del mismo proyecto usen el mismo segmento.
+    """
+    ips = set()
+    for g in sesion["grupos"]:
+        for eq in g["equipos"]:
+            ips.add(eq["ipv4"])
+    return ips
+
+
+def exportar_sesion_json(sesion: dict) -> str:
+    """Serializa la sesión a JSON legible para descarga."""
+    return json.dumps(sesion, indent=2, ensure_ascii=False)
+
+
+def importar_sesion_json(texto: str) -> dict | None:
+    """
+    Carga una sesión desde JSON. Retorna None si el formato es inválido.
+    Se usa cuando el usuario sube un archivo .json de sesión guardada.
+    """
+    try:
+        datos = json.loads(texto)
+        # Validación mínima de estructura
+        if "proyecto" in datos and "grupos" in datos:
+            return datos
+        return None
+    except (json.JSONDecodeError, KeyError):
+        return None
+
+
+# ── Inicializar session_state ────────────────────────────────────────────────
+# st.session_state persiste mientras la pestaña del navegador esté abierta.
+# Al cerrar o recargar se pierde, por eso también ofrecemos descarga JSON.
+if "sesion_activa" not in st.session_state:
+    st.session_state.sesion_activa   = None   # None = no hay sesión iniciada
+if "sesion_confirmada" not in st.session_state:
+    st.session_state.sesion_confirmada = False
+if "_guardar_grupo_pendiente" not in st.session_state:
+    st.session_state._guardar_grupo_pendiente = False
+
 # =============================================================================
 # INTERFAZ — SIDEBAR
 # =============================================================================
 
 st.title("🛡️ CORE-NEXUS: Enterprise Network Engine")
 st.caption("Sistema de Automatización de Redes e Infraestructura de Telecomunicaciones")
+
+# ─────────────────────────────────────────────────────────────────────────
+# BLOQUE DE SESIÓN — aparece antes que cualquier otro control
+# ─────────────────────────────────────────────────────────────────────────
+_col_sesion, _col_import = st.columns([3, 1])
+
+with _col_import:
+    _archivo_sesion = st.file_uploader(
+        "📂 Cargar sesión guardada (.json)",
+        type=["json"], key="upload_sesion",
+        label_visibility="collapsed"
+    )
+    if _archivo_sesion is not None:
+        _datos_cargados = importar_sesion_json(
+            _archivo_sesion.read().decode("utf-8")
+        )
+        if _datos_cargados:
+            st.session_state.sesion_activa    = _datos_cargados
+            st.session_state.sesion_confirmada = True
+            st.success(f"✅ Sesión '{_datos_cargados['proyecto']}' cargada")
+        else:
+            st.error("Archivo JSON inválido o corrupto.")
+
+with _col_sesion:
+    # Caso A: no hay sesión activa → ofrecer iniciar o continuar
+    if st.session_state.sesion_activa is None:
+        st.info(
+            "📋 **Sin sesión activa.** Configura el proyecto en el sidebar y "
+            "guarda grupos a medida que avanzas. Puedes usar marcas distintas "
+            "en el mismo proyecto sin cruzar VLANs ni IPs."
+        )
+
+    # Caso B: hay sesión cargada pero no confirmada por el usuario
+    elif not st.session_state.sesion_confirmada:
+        _s = st.session_state.sesion_activa
+        _total_eq = sum(len(g["equipos"]) for g in _s["grupos"])
+        _vendors  = list({g["vendor"] for g in _s["grupos"]})
+        st.warning(
+            f"⚠️ **Sesión guardada detectada**: proyecto **'{_s['proyecto']}'** "
+            f"— {len(_s['grupos'])} grupo(s), {_total_eq} equipo(s) ya configurados "
+            f"({', '.join(_vendors)}). "
+            f"Creada: {_s.get('creada', '—')}. "
+            "¿Deseas continuar con esta configuración?"
+        )
+        _cb1, _cb2 = st.columns(2)
+        if _cb1.button("✅ Sí, continuar sesión", use_container_width=True):
+            st.session_state.sesion_confirmada = True
+            st.rerun()
+        if _cb2.button("🗑️ No, iniciar nueva sesión", use_container_width=True):
+            st.session_state.sesion_activa    = None
+            st.session_state.sesion_confirmada = False
+            st.rerun()
+
+    # Caso C: sesión activa y confirmada → mostrar resumen
+    else:
+        _s = st.session_state.sesion_activa
+        _total_eq = sum(len(g["equipos"]) for g in _s["grupos"])
+        st.success(
+            f"📁 **Sesión activa**: '{_s['proyecto']}' "
+            f"— {len(_s['grupos'])} grupo(s) | {_total_eq} equipo(s) configurados"
+        )
+
+st.divider()
 
 with st.sidebar:
     st.header("⚙️ Configuración Maestro")
@@ -1953,6 +2283,31 @@ with st.sidebar:
     st.caption("🌐 Base de red fija: 192.168.x.1")
     st.caption(f"🔑 Gestión SSH: {SSH_USER} / {SSH_PASS}")
 
+    st.divider()
+    st.subheader("💾 Sesión de Proyecto")
+    if st.button("➕ Guardar grupo actual en sesión",
+                  use_container_width=True,
+                  help="Guarda los equipos configurados en esta pantalla "
+                       "dentro de la sesión del proyecto. "
+                       "Puedes seguir añadiendo grupos con otra marca."):
+        # Inicializar sesión si no existe
+        if st.session_state.sesion_activa is None:
+            st.session_state.sesion_activa = sesion_vacia(proyecto)
+            st.session_state.sesion_confirmada = True
+
+        # Detectar conflictos de VLAN con grupos anteriores
+        _vlans_prev = vlans_usadas_en_sesion(st.session_state.sesion_activa)
+        _ips_prev   = ips_usadas_en_sesion(st.session_state.sesion_activa)
+        # red_data aún no está definido aquí (se calcula abajo),
+        # usamos st.session_state para pasar los datos al momento del click
+        st.session_state._guardar_grupo_pendiente = True
+    if st.button("🗑️ Limpiar sesión completa",
+                  use_container_width=True):
+        st.session_state.sesion_activa    = None
+        st.session_state.sesion_confirmada = False
+        st.session_state._guardar_grupo_pendiente = False
+        st.rerun()
+
 
 # =============================================================================
 # INTERFAZ — CONTROLES PRINCIPALES
@@ -1961,41 +2316,104 @@ with st.sidebar:
 c_a, c_b, c_c = st.columns(3)
 num_equipos = c_a.number_input("N° de Equipos / Segmentos", 1, SEGMENTOS_MAX, 3)
 host_base   = c_b.text_input("Prefijo Hostname", "CORE-SW")
-# VLAN desde 10, paso de 1 en 1
-vlan_start  = c_c.number_input("VLAN Inicial (datos)", VLAN_ID_MIN, VLAN_ID_MAX, 10, step=1)
+
+# VLAN inicial: editable solo si no hay sesión activa con datos.
+# Con sesión activa, el sistema calcula el siguiente valor automáticamente
+# y mostrar el input confundiría al usuario (podría causar conflictos).
+_hay_sesion_con_datos_ctrl = (
+    st.session_state.get("sesion_activa") is not None
+    and st.session_state.get("sesion_confirmada", False)
+    and len(st.session_state["sesion_activa"].get("grupos", [])) > 0
+)
+if _hay_sesion_con_datos_ctrl:
+    # El valor real se calcula abajo en el bloque de cálculo de redes
+    vlan_start = VLAN_ID_MIN  # valor base; se sobreescribe automáticamente
+    c_c.info("🔁 VLAN y IP asignadas automáticamente desde la sesión")
+else:
+    vlan_start = c_c.number_input("VLAN Inicial (datos)", VLAN_ID_MIN, VLAN_ID_MAX, 10, step=1)
 
 
 # =============================================================================
-# CÁLCULO AUTOMÁTICO DE REDES
+# CÁLCULO AUTOMÁTICO DE REDES — con continuación desde sesión activa
 # =============================================================================
 
-# La VLAN administrativa es siempre la anterior a vlan_start.
-# Si vlan_start=10, la admin es la VLAN 10 y los datos empiezan en 11.
-# Para evitar confusión, la admin usa un segmento de red propio (octeto 0).
-vlan_admin = vlan_start              # Primera VLAN = administrativa
-# FIX 1: usa octeto 255 para garantizar aislamiento total de la red de gestión
+vlan_admin = vlan_start
 ip_admin   = f"{IP_BASE_1}.{IP_BASE_2}.{IP_ADMIN_OCTETO}.1"  # 192.168.255.1
+
+# ── Calcular punto de inicio según sesión activa ──────────────────────────
+# Si hay grupos previos en la sesión, el siguiente grupo debe continuar
+# desde el octeto y VLAN más altos ya asignados — sin que el usuario
+# tenga que ajustar nada manualmente.
+_sesion_con_datos = (
+    st.session_state.sesion_activa is not None
+    and st.session_state.sesion_confirmada
+    and len(st.session_state.sesion_activa.get("grupos", [])) > 0
+)
+
+if _sesion_con_datos:
+    _s = st.session_state.sesion_activa
+
+    # Obtener el mayor octeto y la mayor VLAN ya usados en la sesión
+    _octetos_usados = [
+        int(eq["ipv4"].split(".")[2])
+        for g in _s["grupos"] for eq in g["equipos"]
+    ]
+    _vlans_usadas_list = [
+        eq["vlan"]
+        for g in _s["grupos"] for eq in g["equipos"]
+    ]
+
+    _siguiente_octeto = max(_octetos_usados) + 1   # continuar desde el siguiente
+    _siguiente_vlan   = max(_vlans_usadas_list) + 1
+
+    # Conteo de equipos ya configurados para numerar correctamente los nuevos
+    _equipos_previos = sum(len(g["equipos"]) for g in _s["grupos"])
+
+    st.success(
+        f"📡 **Continuando sesión**: los grupos anteriores usaron octetos "
+        f"hasta **192.168.{max(_octetos_usados)}.x** y VLANs hasta "
+        f"**{max(_vlans_usadas_list)}**. "
+        f"Este grupo inicia en **192.168.{_siguiente_octeto}.1** / "
+        f"**VLAN {_siguiente_vlan}** automáticamente."
+    )
+else:
+    # Sin sesión: comportamiento original
+    _siguiente_octeto = 1
+    _siguiente_vlan   = vlan_start + 1
+    _equipos_previos  = 0
 
 st.info(
     f"🔒 **VLAN Administrativa**: VLAN {vlan_admin} — IP gestión: {ip_admin} — "
     f"SSH habilitado (usuario: `{SSH_USER}` / pass: `{SSH_PASS}`)"
 )
 
-# FIX 6: precalcular los comandos de VLAN admin UNA sola vez.
-# Dentro del loop cada equipo los reutiliza sin regenerarlos,
-# evitando el error "RSA key already exists" en equipos reales.
 cmds_admin_precalc = cmds_vlan_admin(vendor, vlan_admin, ip_admin, host_base + "-MGMT")
 
-# Las VLANs de datos empiezan en vlan_start + 1
+# ── Loop de generación — usa los puntos de inicio calculados ──────────────
 red_data = []
 for i in range(num_equipos):
-    tercer_octeto = i + 1                        # 192.168.1.x, 192.168.2.x ...
+    # Octeto y VLAN continúan desde donde dejó el grupo anterior
+    tercer_octeto = _siguiente_octeto + i
+    vlan          = _siguiente_vlan + i
+
+    # Validación: octeto no puede superar 254 (255 = reservado para admin)
+    if tercer_octeto >= int(IP_ADMIN_OCTETO):
+        st.error(
+            f"⚠️ Se alcanzó el límite de segmentos: el octeto {tercer_octeto} "
+            f"está reservado para gestión (192.168.{IP_ADMIN_OCTETO}.x). "
+            "Reduce el número de equipos."
+        )
+        break
+
     gw   = f"{IP_BASE_1}.{IP_BASE_2}.{tercer_octeto}.1"
-    vlan = vlan_start + 1 + i                    # Admin ocupa vlan_start; datos desde +1
     ipv6 = generar_ipv6(gw, modo_ipv6)
+
+    # El número de equipo continúa desde el total previo en la sesión
+    num_global = _equipos_previos + i + 1
+
     red_data.append({
-        "Equipo":       f"{host_base}-{str(i+1).zfill(2)}",
-        "Segmento":     f"Segmento {i+1}",
+        "Equipo":       f"{host_base}-{str(num_global).zfill(2)}",
+        "Segmento":     f"Segmento {num_global}",
         "VLAN Datos":    vlan,
         "Nombre VLAN":  f"VLAN_{vlan}",
         "IPv4 Gateway":  gw,
@@ -2037,7 +2455,38 @@ st.divider()
 # PESTAÑAS PRINCIPALES: SWITCHES | FIREWALL
 # =============================================================================
 
-tab_sw, tab_fw, tab_fmt = st.tabs(["🖧 Switches / Routers", "🔥 Firewall", "🔧 Formateo Previo"])
+# ── Procesar guardado pendiente (necesita red_data ya calculado) ──────
+if st.session_state._guardar_grupo_pendiente:
+    st.session_state._guardar_grupo_pendiente = False
+    _vlans_prev = vlans_usadas_en_sesion(st.session_state.sesion_activa)
+    _ips_prev   = ips_usadas_en_sesion(st.session_state.sesion_activa)
+    _vlans_nuevas = {r["VLAN Datos"] for r in red_data}
+    _ips_nuevas   = {r["IPv4 Gateway"] for r in red_data}
+    _conflicto_vlan = _vlans_nuevas & _vlans_prev
+    _conflicto_ip   = _ips_nuevas   & _ips_prev
+    if _conflicto_vlan or _conflicto_ip:
+        # Este caso solo ocurre si el usuario cargó una sesión JSON externa
+        # con datos inconsistentes. En uso normal no debería ocurrir porque
+        # el cálculo automático ya evita los conflictos.
+        _detalle = []
+        if _conflicto_vlan: _detalle.append(f"VLANs: {sorted(_conflicto_vlan)}")
+        if _conflicto_ip:   _detalle.append(f"IPs: {sorted(_conflicto_ip)}")
+        st.warning(
+            f"⚠️ Solapamiento detectado en la sesión cargada ({' | '.join(_detalle)}). "
+            "Revisa el archivo JSON de sesión para corregirlo manualmente."
+        )
+    else:
+        st.session_state.sesion_activa = agregar_grupo_a_sesion(
+            st.session_state.sesion_activa,
+            vendor, red_data, vlan_start, host_base,
+            modo_ipv6, proto_v4, proto_v6, modo_ha
+        )
+        _n = len(st.session_state.sesion_activa["grupos"])
+        st.success(f"✅ Grupo {_n} ({vendor}, {len(red_data)} equipo(s)) guardado en la sesión.")
+
+tab_sw, tab_fw, tab_fmt, tab_sesion = st.tabs(
+    ["🖧 Switches / Routers", "🔥 Firewall", "🔧 Formateo Previo", "📁 Sesión de Proyecto"]
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2236,31 +2685,64 @@ with tab_fmt:
     )
 
     # Descripción visual de los tres niveles
+    # Se usa HTML puro en lugar de st.info/warning/error para garantizar
+    # que el texto sea legible en AMBOS modos (claro y oscuro).
+    # st.info/warning/error heredan el color del tema y en modo claro
+    # el texto puede quedar ilegible sobre el fondo coloreado.
     fc1, fc2, fc3 = st.columns(3)
+    CARD_STYLE = (
+        "border-radius:10px; padding:16px 18px; height:100%;"
+        "font-size:14px; line-height:1.6;"
+    )
     with fc1:
-        st.info(
-            "**1. Limpieza Selectiva**\n\n"
-            "Borra solo lo que este proyecto va a reconfigurar "
-            "(VLANs, DHCP, routing, HA). "
-            "Conserva SSH, hostname y puertos físicos.\n\n"
-            "✅ Equipo en producción que se parcializa."
+        st.markdown(
+            f'''<div style="{CARD_STYLE}
+                background:#e8f4fd; border:1.5px solid #2196f3; color:#0d2137;">
+                <strong style="font-size:15px; color:#0d47a1;">
+                    🔵 1. Limpieza Selectiva
+                </strong><br><br>
+                Borra <strong>solo lo que este proyecto reconfigura</strong>:
+                VLANs, DHCP, routing y HA.<br><br>
+                Conserva SSH, hostname y puertos físicos.<br><br>
+                <span style="color:#1b5e20; font-weight:500;">
+                    ✅ Equipo en producción que se parcializa.
+                </span>
+            </div>''',
+            unsafe_allow_html=True
         )
     with fc2:
-        st.warning(
-            "**2. Reset Completo**\n\n"
-            "Borra toda la configuración lógica "
-            "(VLANs, routing, ACLs, NAT, HA) pero preserva "
-            "la conectividad de gestión para no perder acceso.\n\n"
-            "⚠️ Equipo reutilizado completamente."
+        st.markdown(
+            f'''<div style="{CARD_STYLE}
+                background:#fff8e1; border:1.5px solid #ff9800; color:#3e2000;">
+                <strong style="font-size:15px; color:#e65100;">
+                    🟠 2. Reset Completo
+                </strong><br><br>
+                Borra <strong>toda la configuración lógica</strong>
+                (VLANs, routing, ACLs, NAT, HA).<br><br>
+                Preserva la conectividad de gestión para no perder acceso.<br><br>
+                <span style="color:#bf360c; font-weight:500;">
+                    ⚠️ Equipo reutilizado completamente.
+                </span>
+            </div>''',
+            unsafe_allow_html=True
         )
     with fc3:
-        st.error(
-            "**3. Reset de Fábrica**\n\n"
-            "Devuelve al estado de fábrica. "
-            "Se pierde TODO el acceso remoto.\n\n"
-            "🔴 Requiere consola física. "
-            "Aplicar deploy inmediatamente después."
+        st.markdown(
+            f'''<div style="{CARD_STYLE}
+                background:#fdecea; border:1.5px solid #f44336; color:#3b0000;">
+                <strong style="font-size:15px; color:#b71c1c;">
+                    🔴 3. Reset de Fábrica
+                </strong><br><br>
+                Devuelve al <strong>estado de fábrica completo</strong>.<br><br>
+                Se pierde TODO el acceso remoto hasta aplicar el nuevo deploy.<br><br>
+                <span style="color:#7f0000; font-weight:600;">
+                    🔴 Requiere consola física.<br>
+                    Aplicar deploy inmediatamente.
+                </span>
+            </div>''',
+            unsafe_allow_html=True
         )
+    st.markdown("<br>", unsafe_allow_html=True)  # Espaciado tras las tarjetas
 
     st.divider()
 
@@ -2362,3 +2844,91 @@ with tab_fmt:
                 mime="text/plain",
                 key=f"dl_fmt_{r['Equipo']}"
             )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 4 — SESIÓN DE PROYECTO
+# ─────────────────────────────────────────────────────────────────────────────
+with tab_sesion:
+    st.subheader("📁 Sesión de Proyecto")
+
+    if st.session_state.sesion_activa is None or not st.session_state.sesion_confirmada:
+        st.info(
+            "No hay sesión activa. Configura equipos en el sidebar y "
+            "presiona **➕ Guardar grupo actual en sesión** para empezar a registrar."
+        )
+    else:
+        _s = st.session_state.sesion_activa
+        _total_eq   = sum(len(g["equipos"]) for g in _s["grupos"])
+        _vendors_s  = list({g["vendor"] for g in _s["grupos"]})
+        _vlans_s    = sorted({eq["vlan"] for g in _s["grupos"] for eq in g["equipos"]})
+        _ips_s      = sorted({eq["ipv4"] for g in _s["grupos"] for eq in g["equipos"]})
+
+        # Métricas resumen
+        mc1, mc2, mc3, mc4 = st.columns(4)
+        mc1.metric("Proyecto",   _s["proyecto"])
+        mc2.metric("Grupos",     len(_s["grupos"]))
+        mc3.metric("Equipos",    _total_eq)
+        mc4.metric("Vendors",    ", ".join(_vendors_s))
+
+        st.caption(f"Creada: {_s.get('creada','—')}")
+        st.divider()
+
+        # Detalle por grupo
+        for g in _s["grupos"]:
+            with st.expander(
+                f"📦 Grupo {g['id']} — {g['vendor']} — "
+                f"{len(g['equipos'])} equipo(s) — guardado {g['guardado']}",
+                expanded=True
+            ):
+                # Tabla de equipos del grupo
+                df_g = pd.DataFrame(g["equipos"])
+                st.dataframe(df_g, use_container_width=True, hide_index=True)
+
+                # Advertencias de solapamiento entre grupos
+                _otras_vlans = {
+                    eq["vlan"]
+                    for og in _s["grupos"] if og["id"] != g["id"]
+                    for eq in og["equipos"]
+                }
+                _otras_ips = {
+                    eq["ipv4"]
+                    for og in _s["grupos"] if og["id"] != g["id"]
+                    for eq in og["equipos"]
+                }
+                _vlans_g = {eq["vlan"] for eq in g["equipos"]}
+                _ips_g   = {eq["ipv4"] for eq in g["equipos"]}
+                if _vlans_g & _otras_vlans:
+                    st.error(f"⛔ VLANs solapadas con otro grupo: {sorted(_vlans_g & _otras_vlans)}")
+                elif _ips_g & _otras_ips:
+                    st.error(f"⛔ IPs solapadas con otro grupo: {sorted(_ips_g & _otras_ips)}")
+                else:
+                    st.success("✅ Sin solapamientos con otros grupos")
+
+        st.divider()
+
+        # VLANs e IPs usadas en toda la sesión
+        sc1, sc2 = st.columns(2)
+        with sc1:
+            st.markdown("**VLANs asignadas en la sesión**")
+            st.code(", ".join(str(v) for v in _vlans_s))
+        with sc2:
+            st.markdown("**IPs gateway asignadas en la sesión**")
+            st.code("\n".join(_ips_s))
+
+        st.divider()
+
+        # Descarga JSON de la sesión completa
+        _json_sesion = exportar_sesion_json(_s)
+        st.download_button(
+            "💾 Descargar sesión completa (.json)",
+            data=_json_sesion,
+            file_name=f"SESION_{_s['proyecto'].replace(' ','_')}.json",
+            mime="application/json",
+            use_container_width=True,
+            key="dl_sesion_json"
+        )
+        st.caption(
+            "Guarda este archivo para continuar la configuración en otra sesión "
+            "o compartirla con otro usuario. Usa el botón '📂 Cargar sesión' arriba."
+        )
