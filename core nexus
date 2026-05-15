@@ -1,5 +1,5 @@
 # =============================================================================
-# CORE-NEXUS v4.4 — Enterprise Network Engine
+# CORE-NEXUS v4.5 — Enterprise Network Engine
 # =============================================================================
 
 import streamlit as st
@@ -1860,7 +1860,9 @@ def generar_config_router(vendor: str, ipv4: str, ipv6: str | None,
                            vlan_admin: int, ip_admin: str,
                            modo_ha: str = "Ninguno",
                            ip_respaldo: str = "0.0.0.0",
-                           es_activo: bool = True) -> tuple:
+                           es_activo: bool = True,
+                           iface_lan: str = "GigabitEthernet0/0",
+                           iface_wan: str = "GigabitEthernet0/1") -> tuple:
     dep, rb = [], []
     ip_wan_gw = f"{IP_BASE_1}.{IP_BASE_2}.{IP_ADMIN_OCTETO}.254"
 
@@ -1869,7 +1871,7 @@ def generar_config_router(vendor: str, ipv4: str, ipv6: str | None,
         if ipv6:
             dep.append("ipv6 unicast-routing")
         dep.extend([
-            "interface GigabitEthernet0/0",
+            f"interface {iface_lan}",
             f" ip address {ipv4} {SUBNET_MASK}",
             " description LAN",
             " no shutdown",
@@ -1878,7 +1880,7 @@ def generar_config_router(vendor: str, ipv4: str, ipv6: str | None,
             dep.extend([f" ipv6 address {ipv6.split('/')[0]}/64", " ipv6 enable"])
         dep.extend([
             " exit",
-            "interface GigabitEthernet0/1",
+            f"interface {iface_wan}",
             f" ip address {ip_wan_gw} {SUBNET_MASK}",
             " description WAN", " no shutdown", " exit",
             f"ip route 0.0.0.0 0.0.0.0 {ip_wan_gw}",
@@ -1888,7 +1890,7 @@ def generar_config_router(vendor: str, ipv4: str, ipv6: str | None,
         if modo_ha in ("IP SLA + Ruta Flotante", "Completo"):
             dep.extend([
                 f"ip sla {IPSLA_NUM}",
-                f" icmp-echo {ip_respaldo} source-interface GigabitEthernet0/0",
+                f" icmp-echo {ip_respaldo} source-interface {iface_lan}",
                 " frequency 5", " exit",
                 f"ip sla schedule {IPSLA_NUM} life forever start-time now",
                 f"track {TRACK_NUM} ip sla {IPSLA_NUM} reachability",
@@ -1898,7 +1900,7 @@ def generar_config_router(vendor: str, ipv4: str, ipv6: str | None,
         dep.extend(["end", "write memory"])
         rb.extend([
             "enable", "configure terminal",
-            "no interface GigabitEthernet0/0", "no interface GigabitEthernet0/1",
+            f"no interface {iface_lan}", f"no interface {iface_wan}",
             f"no ip route 0.0.0.0 0.0.0.0 {ip_wan_gw}",
             f"no ip sla {IPSLA_NUM}", f"no track {TRACK_NUM}",
             "end", "write memory",
@@ -2337,7 +2339,9 @@ if st.session_state.vista_resumen:
                     rt.get("as_number",65001), rt.get("bgp_neighbor",""), rt.get("bgp_neighbor_as",65002),
                     rt.get("ospf_router_id","1.1.1.1"), [],
                     rt.get("vlan_admin",10), rt.get("ip_admin","192.168.255.1"),
-                    rt.get("modo_ha","Ninguno"), rt.get("ip_respaldo","0.0.0.0"), rt.get("es_activo",True)
+                    rt.get("modo_ha","Ninguno"), rt.get("ip_respaldo","0.0.0.0"), rt.get("es_activo",True),
+                    iface_lan=rt.get("iface_lan","GigabitEthernet0/0"),
+                    iface_wan=rt.get("iface_wan","GigabitEthernet0/1")
                 )
                 td, tr = st.tabs(["📄 Deploy", "⏪ Rollback"])
                 with td:
@@ -2811,6 +2815,34 @@ with tab_rt:
     num_rt       = rt_col2.number_input("Cantidad de Routers", 1, SEGMENTOS_MAX, 2, key="num_rt")
     host_base_rt = rt_col3.text_input("Prefijo Hostname Router", "CORE-RT", key="hb_rt")
 
+    # Selector de interfaces — solo relevante para Cisco
+    # Huawei y Fortinet tienen sus propios nombres fijos
+    if vendor_rt == "Cisco":
+        MODELOS_CISCO = {
+            "Físico — GigabitEthernet0/0 / Gi0/1 (ISR 4000, 2900, 3900)": ("GigabitEthernet0/0",  "GigabitEthernet0/1"),
+            "Físico — GigabitEthernet0/0/0 / Gi0/0/1 (ISR 4321, 4331, 4351)": ("GigabitEthernet0/0/0", "GigabitEthernet0/0/1"),
+            "Packet Tracer — FastEthernet0/0 / Fa0/1 (Router 1841, 2811)": ("FastEthernet0/0",     "FastEthernet0/1"),
+            "Packet Tracer — GigabitEthernet0/0/0 / Gi0/0/1 (Router 4321 PT)": ("GigabitEthernet0/0/0", "GigabitEthernet0/0/1"),
+        }
+        modelo_sel = st.selectbox(
+            "Modelo / Tipo de interfaces",
+            list(MODELOS_CISCO.keys()),
+            key="rt_modelo",
+            help="Selecciona según el modelo físico o el router que usas en Packet Tracer"
+        )
+        rt_iface_lan, rt_iface_wan = MODELOS_CISCO[modelo_sel]
+        st.markdown(f"""
+        <div class="cn-info-bar">
+            <span class="cn-label">Interfaces</span>
+            LAN → <strong style="color:#00d4ff;">{rt_iface_lan}</strong>
+            &nbsp;·&nbsp; WAN → <strong style="color:#00d4ff;">{rt_iface_wan}</strong>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        # Huawei usa GigabitEthernet0/0/0 fijo; Fortinet usa internal/wan1 fijo
+        rt_iface_lan = "GigabitEthernet0/0/0" if vendor_rt == "Huawei" else "internal"
+        rt_iface_wan = "GigabitEthernet0/0/1" if vendor_rt == "Huawei" else "wan1"
+
     # VLAN/IP de inicio para routers (octetos independientes de los switches)
     rt_oct_ini = st.number_input(
         "Octeto inicial de IP LAN (192.168.X.1)", 100, 200, 100, key="rt_oct_ini",
@@ -2856,7 +2888,8 @@ with tab_rt:
             vendor_rt, rt["ipv4"], ipv6_real, rt["host"],
             proto_v4, proto_v6, as_number, bgp_neighbor, bgp_neighbor_as,
             ospf_router_id, [], vlan_admin, ip_admin,
-            modo_ha, ip_respaldo, es_activo
+            modo_ha, ip_respaldo, es_activo,
+            iface_lan=rt_iface_lan, iface_wan=rt_iface_wan
         )
         lineas_all_rt += [
             "=" * 60,
@@ -2886,7 +2919,8 @@ with tab_rt:
             vendor_rt, rt["ipv4"], ipv6_real, rt["host"],
             proto_v4, proto_v6, as_number, bgp_neighbor, bgp_neighbor_as,
             ospf_router_id, [], vlan_admin, ip_admin,
-            modo_ha, ip_respaldo, es_activo
+            modo_ha, ip_respaldo, es_activo,
+            iface_lan=rt_iface_lan, iface_wan=rt_iface_wan
         )
         deploy_txt   = "\n".join(dep)
         rollback_txt = "\n".join(rb)
@@ -2942,6 +2976,8 @@ with tab_rt:
                 "ospf_router_id": ospf_router_id,
                 "vlan_admin":    vlan_admin,
                 "ip_admin":      ip_admin,
+                "iface_lan":     rt_iface_lan,
+                "iface_wan":     rt_iface_wan,
                 "ts":            ts_now,
             })
 
