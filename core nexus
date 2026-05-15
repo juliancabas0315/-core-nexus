@@ -1,14 +1,12 @@
 # =============================================================================
-# CORE-NEXUS v4.3 — Enterprise Network Engine
-# =============================================================================
-# Novedades v4.3:
-#   -AJUSTES GRAFICOS 
+# CORE-NEXUS v4.4 — Enterprise Network Engine
 # =============================================================================
 
 import streamlit as st
 import pandas as pd
 import json
 import datetime
+import os
 
 # -----------------------------------------------------------------------------
 # CONFIGURACIÓN DE PÁGINA
@@ -675,330 +673,305 @@ hr {
 .cn-fmt-warn  { font-weight: 600; font-size: 12px; margin-top: 10px; }
 
 /* ══════════════════════════════════════════════════════════
-   MODO CLARO — cobertura completa de todos los elementos
+   TEMA OSCURO — cuando Streamlit está en dark mode
+   Streamlit añade la clase .st-emotion-cache-* y usa
+   data-theme="dark" en el body cuando el usuario elige oscuro
 ══════════════════════════════════════════════════════════ */
 
-/* Variables redefinidas para modo claro */
-[data-theme="light"] {
-    --bg-base:        #f0f4fa;
-    --bg-card:        #ffffff;
-    --bg-elevated:    #e8eef8;
-    --bg-hover:       #dce6f5;
-    --border:         #c4d4e8;
-    --border-bright:  #94b4d4;
-    --cyan:           #0066aa;
-    --cyan-dim:       #004e88;
-    --cyan-glow:      rgba(0,102,170,0.12);
-    --cyan-glow-sm:   rgba(0,102,170,0.07);
-    --green:          #0a7a4a;
-    --amber:          #996600;
-    --red:            #bb1a22;
-    --text-primary:   #0f1e38;
-    --text-secondary: #2c4466;
-    --text-muted:     #6080a0;
-    --shadow-card:    0 2px 12px rgba(0,40,100,0.10);
-    --shadow-glow:    0 0 16px rgba(0,102,170,0.10);
+/* Fondo de app — oscuro */
+[data-theme="dark"] .stApp {
+    background: linear-gradient(160deg, #080c15 0%, #0b0f1a 40%, #0d1220 100%) !important;
+}
+[data-theme="dark"] [data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #080c14 0%, #0c1220 100%) !important;
 }
 
-/* App background */
+/* Métricas — oscuro */
+[data-theme="dark"] [data-testid="stMetric"] {
+    background: #1a1f2e !important;
+    border-left: 3px solid #00d4ff !important;
+    border-top: 1px solid #1f2d45 !important;
+    border-right: 1px solid #1f2d45 !important;
+    border-bottom: 1px solid #1f2d45 !important;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.4) !important;
+}
+[data-theme="dark"] [data-testid="stMetricLabel"] p,
+[data-theme="dark"] [data-testid="stMetricLabel"] span {
+    color: #4a5a72 !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1px !important;
+}
+[data-theme="dark"] [data-testid="stMetricValue"],
+[data-theme="dark"] [data-testid="stMetricValue"] > div {
+    color: #e2e8f0 !important;
+    font-weight: 700 !important;
+}
+
+/* Inputs — oscuro */
+[data-theme="dark"] [data-testid="stTextInput"] input,
+[data-theme="dark"] [data-testid="stNumberInput"] input {
+    background: #1a2236 !important;
+    border: 1px solid #1f2d45 !important;
+    color: #e2e8f0 !important;
+}
+
+/* Botones — oscuro */
+[data-theme="dark"] .stButton > button {
+    background: #1e2a3a !important;
+    border: 1px solid #2d4060 !important;
+    color: #e2e8f0 !important;
+}
+[data-theme="dark"] .stButton > button:hover {
+    background: #1e2a40 !important;
+    border-color: #0099bb !important;
+    color: #00d4ff !important;
+}
+[data-theme="dark"] .stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #0077aa 0%, #00a8cc 100%) !important;
+    border: 1px solid #0099bb !important;
+    color: #ffffff !important;
+}
+[data-theme="dark"] [data-testid="stDownloadButton"] > button {
+    background: transparent !important;
+    border: 1px dashed #2d4060 !important;
+    color: #8ba0bc !important;
+}
+[data-theme="dark"] [data-testid="stDownloadButton"] > button:hover {
+    background: rgba(0,212,255,0.06) !important;
+    border-color: #0099bb !important;
+    border-style: solid !important;
+    color: #00d4ff !important;
+}
+
+/* Expanders — oscuro */
+[data-theme="dark"] [data-testid="stExpander"] {
+    background: #111827 !important;
+    border: 1px solid #1f2d45 !important;
+}
+[data-theme="dark"] [data-testid="stExpander"] summary {
+    background: #111827 !important;
+}
+[data-theme="dark"] [data-testid="stExpander"] summary:hover {
+    background: #1a2236 !important;
+}
+
+/* Tabs — oscuro */
+[data-theme="dark"] [data-testid="stTabs"] button {
+    color: #4a5a72 !important;
+}
+[data-theme="dark"] [data-testid="stTabs"] button[aria-selected="true"] {
+    color: #00d4ff !important;
+    border-bottom: 2px solid #00d4ff !important;
+}
+[data-theme="dark"] [data-testid="stTabs"] button p,
+[data-theme="dark"] [data-testid="stTabs"] button span {
+    color: inherit !important;
+}
+
+/* Code / textarea — oscuro */
+[data-theme="dark"] textarea,
+[data-theme="dark"] [data-testid="stTextArea"] textarea {
+    background: #070b12 !important;
+    color: #c8d8e8 !important;
+    border: 1px solid #1f2d45 !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   TEMA CLARO — cuando Streamlit está en light mode
+══════════════════════════════════════════════════════════ */
+
 [data-theme="light"] .stApp {
     background: linear-gradient(160deg, #e4ecf8 0%, #f0f4fa 50%, #e8f0f8 100%) !important;
 }
-
-/* ── Texto general ── */
-[data-theme="light"] p,
-[data-theme="light"] span,
-[data-theme="light"] div,
-[data-theme="light"] label {
-    color: var(--text-primary) !important;
-}
-
-/* Títulos */
-[data-theme="light"] h1,
-[data-theme="light"] h2,
-[data-theme="light"] h3,
-[data-theme="light"] h4 {
-    color: var(--text-primary) !important;
-}
-
-/* h3 override — mantener cian pero oscuro */
-[data-theme="light"] h3 {
-    color: var(--cyan) !important;
-}
-
-/* ── Sidebar ── */
 [data-theme="light"] [data-testid="stSidebar"] {
     background: linear-gradient(180deg, #dae4f4 0%, #e8f0fa 100%) !important;
-    border-right: 1px solid var(--border) !important;
+}
+
+/* Textos — claro */
+[data-theme="light"] p,
+[data-theme="light"] span,
+[data-theme="light"] label,
+[data-theme="light"] h1,
+[data-theme="light"] h2,
+[data-theme="light"] h4 {
+    color: #0f1e38 !important;
+}
+[data-theme="light"] h3 {
+    color: #0066aa !important;
+}
+[data-theme="light"] [data-testid="stCaptionContainer"] p {
+    color: #6080a0 !important;
 }
 [data-theme="light"] [data-testid="stSidebar"] p,
 [data-theme="light"] [data-testid="stSidebar"] span,
-[data-theme="light"] [data-testid="stSidebar"] label,
-[data-theme="light"] [data-testid="stSidebar"] div {
-    color: var(--text-secondary) !important;
+[data-theme="light"] [data-testid="stSidebar"] label {
+    color: #2c4466 !important;
 }
 [data-theme="light"] [data-testid="stSidebar"] h2 {
-    color: var(--cyan) !important;
-    border-bottom-color: var(--border) !important;
+    color: #0066aa !important;
 }
 
-/* ── Captions ── */
-[data-theme="light"] [data-testid="stCaptionContainer"] p {
-    color: var(--text-muted) !important;
-}
-
-/* ── Métricas ── */
+/* Métricas — claro */
 [data-theme="light"] [data-testid="stMetric"] {
     background: #ffffff !important;
-    border: 1px solid var(--border) !important;
-    border-left: 3px solid var(--cyan) !important;
-    box-shadow: var(--shadow-card) !important;
+    border-left: 3px solid #0066aa !important;
+    border-top: 1px solid #c4d4e8 !important;
+    border-right: 1px solid #c4d4e8 !important;
+    border-bottom: 1px solid #c4d4e8 !important;
+    box-shadow: 0 2px 12px rgba(0,40,100,0.10) !important;
 }
 [data-theme="light"] [data-testid="stMetricLabel"] p,
 [data-theme="light"] [data-testid="stMetricLabel"] span {
-    color: var(--text-muted) !important;
+    color: #6080a0 !important;
 }
 [data-theme="light"] [data-testid="stMetricValue"],
 [data-theme="light"] [data-testid="stMetricValue"] > div {
-    color: var(--text-primary) !important;
-}
-[data-theme="light"] [data-testid="stMetricDelta"],
-[data-theme="light"] [data-testid="stMetricDelta"] svg {
-    color: var(--green) !important;
-    fill: var(--green) !important;
+    color: #0f1e38 !important;
 }
 
-/* ── Inputs ── */
+/* Inputs — claro */
 [data-theme="light"] [data-testid="stTextInput"] input,
 [data-theme="light"] [data-testid="stNumberInput"] input {
     background: #ffffff !important;
-    border: 1px solid var(--border) !important;
-    color: var(--text-primary) !important;
+    border: 1px solid #c4d4e8 !important;
+    color: #0f1e38 !important;
 }
 [data-theme="light"] [data-testid="stTextInput"] label p,
 [data-theme="light"] [data-testid="stNumberInput"] label p,
 [data-theme="light"] [data-testid="stSelectbox"] label p,
 [data-theme="light"] [data-testid="stCheckbox"] label p {
-    color: var(--text-secondary) !important;
+    color: #2c4466 !important;
 }
-
-/* Selectbox */
 [data-theme="light"] [data-testid="stSelectbox"] > div > div {
     background: #ffffff !important;
-    border: 1px solid var(--border) !important;
-    color: var(--text-primary) !important;
-}
-[data-theme="light"] [data-testid="stSelectbox"] > div > div > div {
-    color: var(--text-primary) !important;
+    border: 1px solid #c4d4e8 !important;
+    color: #0f1e38 !important;
 }
 
-/* Checkbox */
-[data-theme="light"] [data-testid="stCheckbox"] span {
-    color: var(--text-primary) !important;
-}
-
-/* ── Tabs ── */
-[data-theme="light"] [data-testid="stTabs"] button p,
-[data-theme="light"] [data-testid="stTabs"] button span,
-[data-theme="light"] [data-testid="stTabs"] button div {
-    color: var(--text-muted) !important;
-}
-[data-theme="light"] [data-testid="stTabs"] button[aria-selected="true"] p,
-[data-theme="light"] [data-testid="stTabs"] button[aria-selected="true"] span,
-[data-theme="light"] [data-testid="stTabs"] button[aria-selected="true"] div {
-    color: var(--cyan) !important;
-    font-weight: 700 !important;
-}
-[data-theme="light"] [data-testid="stTabs"] button[aria-selected="true"] {
-    border-bottom: 2px solid var(--cyan) !important;
-}
-
-/* ── Botones ── */
+/* Botones — claro */
 [data-theme="light"] .stButton > button {
     background: #ffffff !important;
-    border: 1px solid var(--border) !important;
-    color: var(--text-primary) !important;
-}
-[data-theme="light"] .stButton > button p,
-[data-theme="light"] .stButton > button span,
-[data-theme="light"] .stButton > button div {
-    color: var(--text-primary) !important;
+    border: 1px solid #c4d4e8 !important;
+    color: #0f1e38 !important;
 }
 [data-theme="light"] .stButton > button:hover {
-    background: var(--bg-elevated) !important;
-    border-color: var(--cyan-dim) !important;
-    color: var(--cyan) !important;
+    background: #e8eef8 !important;
+    border-color: #0066aa !important;
+    color: #0066aa !important;
 }
 [data-theme="light"] .stButton > button[kind="primary"] {
     background: linear-gradient(135deg, #0066aa 0%, #0088cc 100%) !important;
     color: #ffffff !important;
-    border-color: var(--cyan-dim) !important;
+    border-color: #004e88 !important;
 }
-[data-theme="light"] .stButton > button[kind="primary"] p,
-[data-theme="light"] .stButton > button[kind="primary"] span {
-    color: #ffffff !important;
-}
-
-/* Botón descarga */
 [data-theme="light"] [data-testid="stDownloadButton"] > button {
     background: transparent !important;
-    border: 1px dashed var(--border-bright) !important;
-    color: var(--text-secondary) !important;
-}
-[data-theme="light"] [data-testid="stDownloadButton"] > button p,
-[data-theme="light"] [data-testid="stDownloadButton"] > button span {
-    color: var(--text-secondary) !important;
+    border: 1px dashed #94b4d4 !important;
+    color: #2c4466 !important;
 }
 [data-theme="light"] [data-testid="stDownloadButton"] > button:hover {
-    background: var(--bg-elevated) !important;
-    border-color: var(--cyan-dim) !important;
+    background: #e8eef8 !important;
+    border-color: #0066aa !important;
     border-style: solid !important;
-    color: var(--cyan) !important;
+    color: #0066aa !important;
 }
 
-/* ── Expanders ── */
+/* Expanders — claro */
 [data-theme="light"] [data-testid="stExpander"] {
     background: #ffffff !important;
-    border: 1px solid var(--border) !important;
+    border: 1px solid #c4d4e8 !important;
 }
 [data-theme="light"] [data-testid="stExpander"] summary {
     background: #ffffff !important;
 }
 [data-theme="light"] [data-testid="stExpander"] summary:hover {
-    background: var(--bg-elevated) !important;
+    background: #e8eef8 !important;
 }
 [data-theme="light"] [data-testid="stExpander"] summary p,
-[data-theme="light"] [data-testid="stExpander"] summary span,
-[data-theme="light"] [data-testid="stExpander"] summary div {
-    color: var(--text-primary) !important;
+[data-theme="light"] [data-testid="stExpander"] summary span {
+    color: #0f1e38 !important;
 }
 
-/* ── Code / text_area ── */
-[data-theme="light"] [data-testid="stCode"],
-[data-theme="light"] pre,
-[data-theme="light"] code {
-    background: #f0f4fc !important;
-    border: 1px solid var(--border) !important;
-    color: var(--text-primary) !important;
+/* Tabs — claro */
+[data-theme="light"] [data-testid="stTabs"] button {
+    color: #6080a0 !important;
 }
-[data-theme="light"] textarea {
-    background: #f4f7fc !important;
-    border: 1px solid var(--border) !important;
-    color: var(--text-primary) !important;
+[data-theme="light"] [data-testid="stTabs"] button[aria-selected="true"] {
+    color: #0066aa !important;
+    border-bottom: 2px solid #0066aa !important;
 }
+[data-theme="light"] [data-testid="stTabs"] button p,
+[data-theme="light"] [data-testid="stTabs"] button span {
+    color: inherit !important;
+}
+
+/* Code / textarea — claro */
+[data-theme="light"] textarea,
 [data-theme="light"] [data-testid="stTextArea"] textarea {
     background: #f4f7fc !important;
-    color: var(--text-primary) !important;
+    color: #0f1e38 !important;
+    border: 1px solid #c4d4e8 !important;
 }
 
-/* ── Alerts ── */
-[data-theme="light"] [data-testid="stAlert"] {
-    background: rgba(0,102,170,0.06) !important;
-}
-[data-theme="light"] [data-testid="stAlert"] p,
-[data-theme="light"] [data-testid="stAlert"] span,
-[data-theme="light"] [data-testid="stAlert"] div {
-    color: var(--text-primary) !important;
-}
-
-/* ── Tablas ── */
-[data-theme="light"] [data-testid="stTable"] {
-    background: #ffffff !important;
-}
+/* Tablas — claro */
 [data-theme="light"] [data-testid="stTable"] th {
-    background: var(--bg-elevated) !important;
-    color: var(--text-muted) !important;
+    background: #e8eef8 !important;
+    color: #6080a0 !important;
 }
 [data-theme="light"] [data-testid="stTable"] td {
-    color: var(--text-primary) !important;
+    color: #0f1e38 !important;
     background: #ffffff !important;
 }
-[data-theme="light"] [data-testid="stTable"] tr:nth-child(even) td {
-    background: #f6f9fe !important;
+
+/* Alertas — claro */
+[data-theme="light"] [data-testid="stAlert"] p,
+[data-theme="light"] [data-testid="stAlert"] span {
+    color: inherit !important;
 }
 
-/* ── Dataframe ── */
-[data-theme="light"] [data-testid="stDataFrame"] {
-    background: #ffffff !important;
-    border: 1px solid var(--border) !important;
-}
-
-/* ── Divider ── */
-[data-theme="light"] hr {
-    border-top: 1px solid var(--border) !important;
-}
-
-/* ── Componentes custom HTML ── */
+/* Componentes custom HTML — claro */
 [data-theme="light"] .cn-page-header {
     background: #ffffff !important;
-    border-color: var(--border) !important;
-    box-shadow: 0 2px 12px rgba(0,40,100,0.08) !important;
+    border-color: #c4d4e8 !important;
 }
 [data-theme="light"] .cn-info-bar {
     background: rgba(0,102,170,0.06) !important;
-    border-color: rgba(0,102,170,0.2) !important;
-    color: var(--text-secondary) !important;
+    border-left-color: #0066aa !important;
 }
 [data-theme="light"] .cn-section {
     background: #ffffff !important;
-    border-color: var(--border) !important;
+    border-color: #c4d4e8 !important;
 }
-[data-theme="light"] .cn-section-title {
-    color: var(--text-primary) !important;
-}
+[data-theme="light"] .cn-section-title { color: #0f1e38 !important; }
+[data-theme="light"] .cn-section-sub   { color: #6080a0 !important; }
 [data-theme="light"] .cn-resumen-hero {
-    background: linear-gradient(135deg, #dae8f8 0%, #e8f2fc 60%, #f0f6fe 100%) !important;
-    border-color: var(--border) !important;
+    background: linear-gradient(135deg, #dae8f8 0%, #eaf4fe 100%) !important;
+    border-color: #c4d4e8 !important;
 }
-[data-theme="light"] .cn-resumen-hero h2 {
-    color: var(--text-primary) !important;
-}
-[data-theme="light"] .cn-resumen-hero::after {
-    color: rgba(0,102,170,0.05) !important;
-}
+[data-theme="light"] .cn-resumen-hero h2 { color: #0f1e38 !important; }
+[data-theme="light"] .cn-resumen-hero .cn-meta { color: #6080a0 !important; }
 [data-theme="light"] .cn-device-card {
     background: #ffffff !important;
-    border-color: var(--border) !important;
+    border-color: #c4d4e8 !important;
 }
-[data-theme="light"] .cn-device-card .cn-device-host {
-    color: var(--text-primary) !important;
-}
-[data-theme="light"] .cn-session-pill.inactive {
-    background: rgba(96,128,160,0.12) !important;
-    border-color: var(--border) !important;
-    color: var(--text-muted) !important;
-}
+[data-theme="light"] .cn-fmt-blue  { background: rgba(0,100,180,0.07) !important; }
+[data-theme="light"] .cn-fmt-amber { background: rgba(140,70,0,0.07)  !important; }
+[data-theme="light"] .cn-fmt-red   { background: rgba(160,0,0,0.07)   !important; }
 [data-theme="light"] .cn-chip-gray {
-    background: rgba(96,128,160,0.12) !important;
-    color: var(--text-secondary) !important;
-    border-color: var(--border) !important;
-}
-[data-theme="light"] .cn-fmt-blue {
-    background: rgba(0,100,180,0.07) !important;
-    border-color: rgba(0,120,200,0.25) !important;
-}
-[data-theme="light"] .cn-fmt-amber {
-    background: rgba(160,80,0,0.07) !important;
-    border-color: rgba(200,120,0,0.25) !important;
-}
-[data-theme="light"] .cn-fmt-red {
-    background: rgba(180,0,0,0.07) !important;
-    border-color: rgba(200,20,20,0.3) !important;
+    background: rgba(96,128,160,0.15) !important;
+    color: #2c4466 !important;
+    border-color: #c4d4e8 !important;
 }
 
 /* ══════════════════════════════════════════════════════════
    SCROLLBAR
 ══════════════════════════════════════════════════════════ */
 ::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: var(--bg-base); }
-::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--cyan-dim); }
-
-/* ══════════════════════════════════════════════════════════
-   LEGACY OVERRIDES
-══════════════════════════════════════════════════════════ */
-[data-theme="dark"] [data-testid="stAlert"] p,
-[data-theme="dark"] [data-testid="stAlert"] span { color: inherit !important; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2d4060; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #0099bb; }
 
 </style>
 """, unsafe_allow_html=True)
@@ -2328,9 +2301,9 @@ if st.session_state.vista_resumen:
                 )
                 td, tr = st.tabs(["📄 Deploy", "⏪ Rollback"])
                 with td:
-                    st.text_area("", "\n".join(dep), height=300, key=f"ta_{hash("\n".join(dep))}")
+                    st.code("\n".join(dep), language="bash")
                 with tr:
-                    st.text_area("", "\n".join(rb), height=300, key=f"ta_{hash("\n".join(rb))}")
+                    st.code("\n".join(rb), language="bash")
 
                 reporte = (
                     f"CORE-NEXUS | {s['proyecto']}\nSwitch: {sw['host']} ({sw['vendor']})\n"
@@ -2368,9 +2341,9 @@ if st.session_state.vista_resumen:
                 )
                 td, tr = st.tabs(["📄 Deploy", "⏪ Rollback"])
                 with td:
-                    st.text_area("", "\n".join(dep), height=300, key=f"ta_{hash("\n".join(dep))}")
+                    st.code("\n".join(dep), language="bash")
                 with tr:
-                    st.text_area("", "\n".join(rb), height=300, key=f"ta_{hash("\n".join(rb))}")
+                    st.code("\n".join(rb), language="bash")
 
                 reporte = (
                     f"CORE-NEXUS | {s['proyecto']}\nRouter: {rt['host']} ({rt['vendor']})\n"
@@ -2402,9 +2375,9 @@ if st.session_state.vista_resumen:
                 )
                 td, tr = st.tabs(["📄 Deploy", "⏪ Rollback"])
                 with td:
-                    st.text_area("", "\n".join(dep), height=300, key=f"ta_{hash("\n".join(dep))}")
+                    st.code("\n".join(dep), language="bash")
                 with tr:
-                    st.text_area("", "\n".join(rb), height=300, key=f"ta_{hash("\n".join(rb))}")
+                    st.code("\n".join(rb), language="bash")
 
                 reporte = (
                     f"CORE-NEXUS | {s['proyecto']}\nFirewall: {fw['host']} ({fw['vendor']})\n"
@@ -2754,10 +2727,10 @@ with tab_sw:
         ):
             td, tr = st.tabs(["📄 Deploy", "⏪ Rollback"])
             with td:
-                st.text_area("", deploy_txt, height=300, key=f"ta_{hash(deploy_txt)}")
+                st.code(deploy_txt, language="bash")
             with tr:
                 st.warning("Ejecutar solo para revertir cambios.")
-                st.text_area("", rollback_txt, height=300, key=f"ta_{hash(rollback_txt)}")
+                st.code(rollback_txt, language="bash")
             st.download_button(
                 f"💾 Descargar — {sw['host']}",
                 data=reporte_sw,
@@ -2931,10 +2904,10 @@ with tab_rt:
         ):
             td, tr = st.tabs(["📄 Deploy", "⏪ Rollback"])
             with td:
-                st.text_area("", deploy_txt, height=300, key=f"ta_{hash(deploy_txt)}")
+                st.code(deploy_txt, language="bash")
             with tr:
                 st.warning("Ejecutar solo para revertir cambios.")
-                st.text_area("", rollback_txt, height=300, key=f"ta_{hash(rollback_txt)}")
+                st.code(rollback_txt, language="bash")
             st.download_button(
                 f"💾 Descargar — {rt['host']}",
                 data=reporte_rt,
@@ -3091,10 +3064,10 @@ with tab_fw:
 
     tfw_dep, tfw_rb = st.tabs(["📄 Deploy Firewall", "⏪ Rollback Firewall"])
     with tfw_dep:
-        st.text_area("", fw_deploy_txt, height=300, key=f"ta_{hash(fw_deploy_txt)}")
+        st.code(fw_deploy_txt, language="bash")
     with tfw_rb:
         st.warning("Ejecutar solo para revertir la configuración del firewall.")
-        st.text_area("", fw_rollback_txt, height=300, key=f"ta_{hash(fw_rollback_txt)}")
+        st.code(fw_rollback_txt, language="bash")
 
     st.divider()
 
@@ -3247,7 +3220,7 @@ with tab_fmt:
                 st.warning(f"{len(fmt_cmds)} comandos")
             else:
                 st.error(f"{len(fmt_cmds)} comandos")
-            st.text_area("", fmt_txt, height=300, key=f"ta_{hash(fmt_txt)}")
+            st.code(fmt_txt, language="bash")
             st.download_button(
                 f"💾 Descargar — {eq['host']}",
                 data=reporte_fmt,
