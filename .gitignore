@@ -1,0 +1,55 @@
+# ─── Python ─────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Entornos virtuales
+venv/
+env/
+.venv/
+ENV/
+
+# Distribución / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# ─── IDEs ───────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ─── CORE-NEXUS ─────────────────────────────────────────────────────────
+# Sesiones generadas localmente (no subir datos de clientes)
+sessions/*.json
+!sessions/.gitkeep
+
+# Logs
+*.log
+
+# Archivos temporales del editor
+*.tmp
+*.bak
+*~
+
+# ─── Streamlit legacy (si aún tienes la app vieja en este repo) ─────────
+.streamlit/secrets.toml
+
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+sessions/*.json
+!sessions/.gitkeep
+*.log
