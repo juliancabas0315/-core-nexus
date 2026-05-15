@@ -1,11 +1,8 @@
 # =============================================================================
-# CORE-NEXUS v4.2 — Enterprise Network Engine
+# CORE-NEXUS v4.3 — Enterprise Network Engine
 # =============================================================================
-# Novedades v4.2:
-#   - Switches y Routers separados en secciones independientes
-#   - VLANs desacopladas de la cantidad de equipos (se configuran por separado)
-#   - Cantidad de switches y routers configurables independientemente
-#   - Ventana de Resumen de Sesión como página completa separada
+# Novedades v4.3:
+#   -AJUSTES GRAFICOS 
 # =============================================================================
 
 import streamlit as st
@@ -23,125 +20,988 @@ st.set_page_config(
     page_icon="🛡️"
 )
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DESIGN SYSTEM — Industrial Precision Dark Theme
+# Fuente: JetBrains Mono (técnica, perfecta para config de red) +
+#         DM Sans (legible, moderna para UI)
+# Paleta: carbon profundo + cian eléctrico + ámbar de alerta
+# Concepto: panel de control de NOC (Network Operations Center)
+# ─────────────────────────────────────────────────────────────────────────────
 st.markdown("""
-    <style>
-    [data-testid="stMetric"] {
-        padding: 15px;
-        border-radius: 10px;
-        border-left: 5px solid #004a99;
-        transition: box-shadow 0.2s ease;
-    }
-    .stButton > button,
-    [data-testid="stDownloadButton"] > button {
-        width: 100%;
-        border-radius: 6px;
-        height: 3em;
-        font-weight: bold;
-        transition: background-color 0.2s ease, color 0.2s ease;
-    }
-    [data-testid="stCode"] { border-radius: 6px; }
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
-    [data-theme="light"] [data-testid="stMetric"] {
-        background-color: #ffffff;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.06);
-    }
-    [data-theme="light"] [data-testid="stMetricLabel"] p,
-    [data-theme="light"] [data-testid="stMetricLabel"] span { color: #4a4a6a !important; }
-    [data-theme="light"] [data-testid="stMetricValue"] { color: #1a1a2e !important; }
-    [data-theme="light"] [data-testid="stMetricDelta"] { color: #1a6e3c !important; }
-    [data-theme="light"] [data-testid="stExpander"] {
-        background-color: #ffffff;
-        border: 1px solid #dce1e7;
-        border-radius: 8px;
-    }
+<style>
+/* ══════════════════════════════════════════════════════════
+   VARIABLES DE DISEÑO
+══════════════════════════════════════════════════════════ */
+:root {
+    --bg-base:       #0b0f1a;
+    --bg-card:       #111827;
+    --bg-elevated:   #1a2236;
+    --bg-hover:      #1e2a40;
+    --border:        #1f2d45;
+    --border-bright: #2d4060;
+    --cyan:          #00d4ff;
+    --cyan-dim:      #0099bb;
+    --cyan-glow:     rgba(0,212,255,0.15);
+    --cyan-glow-sm:  rgba(0,212,255,0.08);
+    --amber:         #f59e0b;
+    --amber-dim:     #92600a;
+    --green:         #10b981;
+    --green-dim:     #064e35;
+    --red:           #ef4444;
+    --red-dim:       #7f1d1d;
+    --text-primary:  #e2e8f0;
+    --text-secondary:#8ba0bc;
+    --text-muted:    #4a5a72;
+    --font-ui:       'DM Sans', sans-serif;
+    --font-mono:     'JetBrains Mono', monospace;
+    --radius-sm:     6px;
+    --radius-md:     10px;
+    --radius-lg:     16px;
+    --shadow-card:   0 4px 24px rgba(0,0,0,0.4);
+    --shadow-glow:   0 0 20px rgba(0,212,255,0.12);
+}
 
-    [data-theme="dark"] [data-testid="stMetric"] {
-        background-color: #1a1f2e !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.45) !important;
-        border-left-color: #4d9fec !important;
-    }
-    [data-theme="dark"] [data-testid="stMetricLabel"] p,
-    [data-theme="dark"] [data-testid="stMetricLabel"] span {
-        color: #a8b8d0 !important; font-size: 13px !important; font-weight: 500 !important;
-    }
-    [data-theme="dark"] [data-testid="stMetricValue"],
-    [data-theme="dark"] [data-testid="stMetricValue"] > div {
-        color: #e8f0fe !important; font-weight: 700 !important;
-    }
-    [data-theme="dark"] [data-testid="stMetricDelta"],
-    [data-theme="dark"] [data-testid="stMetricDelta"] svg {
-        color: #5bc8af !important; fill: #5bc8af !important;
-    }
-    [data-theme="dark"] [data-testid="stTabs"] button p,
-    [data-theme="dark"] [data-testid="stTabs"] button span,
-    [data-theme="dark"] [data-testid="stTabs"] button div { color: #7a8fa8 !important; }
-    [data-theme="dark"] [data-testid="stTabs"] button[aria-selected="true"] p,
-    [data-theme="dark"] [data-testid="stTabs"] button[aria-selected="true"] span,
-    [data-theme="dark"] [data-testid="stTabs"] button[aria-selected="true"] div {
-        color: #ffffff !important; font-weight: 700 !important;
-    }
-    [data-theme="dark"] [data-testid="stTabs"] button[aria-selected="true"] {
-        border-bottom: 3px solid #4d9fec !important;
-    }
-    [data-theme="dark"] [data-testid="stDownloadButton"] > button {
-        background-color: #1e2a3a !important;
-        border: 1px solid #3a7bd5 !important;
-        color: #e8f0fe !important;
-    }
-    [data-theme="dark"] [data-testid="stDownloadButton"] > button:hover {
-        background-color: #2a3a50 !important; border-color: #4d9fec !important;
-    }
-    [data-theme="dark"] .stButton > button {
-        background-color: #1e2a3a !important;
-        border: 1px solid #3a7bd5 !important;
-        color: #e8f0fe !important;
-    }
-    [data-theme="dark"] .stButton > button:hover { background-color: #2a3a50 !important; }
-    [data-theme="dark"] [data-testid="stExpander"] {
-        background-color: #1e2130 !important;
-        border: 1px solid #2d3250 !important;
-        border-radius: 8px;
-    }
-    [data-theme="dark"] h1, [data-theme="dark"] h2, [data-theme="dark"] h3 {
-        color: #e8f0fe !important;
-    }
-    [data-theme="dark"] [data-testid="stTextInput"] input,
-    [data-theme="dark"] [data-testid="stNumberInput"] input {
-        color: #e8f0fe !important; background-color: #1a1f2e !important;
-    }
-    [data-theme="dark"] [data-testid="stAlert"] p,
-    [data-theme="dark"] [data-testid="stAlert"] span { color: #1a1a1a !important; }
+/* ══════════════════════════════════════════════════════════
+   BASE — Fuente global y fondo
+══════════════════════════════════════════════════════════ */
+html, body, [class*="css"] {
+    font-family: var(--font-ui) !important;
+}
 
-    /* Resumen de sesión - página completa */
-    .resumen-header {
-        background: linear-gradient(135deg, #0d1b2a 0%, #1a2f4a 100%);
-        border-radius: 12px;
-        padding: 24px 32px;
-        margin-bottom: 24px;
-        border-left: 6px solid #4d9fec;
-    }
-    .resumen-grupo {
-        border: 1px solid #2d3250;
-        border-radius: 10px;
-        padding: 20px;
-        margin-bottom: 16px;
-    }
-    .badge {
-        display: inline-block;
-        padding: 3px 10px;
-        border-radius: 20px;
-        font-size: 12px;
-        font-weight: 600;
-        margin-right: 6px;
-    }
-    .badge-cisco { background: #1a4a7a; color: #7ec8ff; }
-    .badge-huawei { background: #7a1a1a; color: #ff9e9e; }
-    .badge-fortinet { background: #1a4a1a; color: #7eff7e; }
-    .badge-sw { background: #2a1a5a; color: #c09eff; }
-    .badge-rt { background: #4a2a1a; color: #ffb87e; }
-    .badge-fw { background: #1a4a4a; color: #7efff0; }
-    </style>
-    """, unsafe_allow_html=True)
+/* App background */
+.stApp {
+    background: linear-gradient(160deg, #080c15 0%, #0b0f1a 40%, #0d1220 100%) !important;
+}
+
+/* Main content area */
+section.main > div {
+    padding-top: 1.5rem !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   SIDEBAR — Panel lateral oscuro profundo
+══════════════════════════════════════════════════════════ */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #080c14 0%, #0c1220 100%) !important;
+    border-right: 1px solid var(--border) !important;
+}
+[data-testid="stSidebar"] > div {
+    padding: 1.5rem 1rem !important;
+}
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 {
+    color: var(--text-primary) !important;
+    font-family: var(--font-ui) !important;
+    letter-spacing: -0.3px !important;
+}
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] p {
+    color: var(--text-secondary) !important;
+    font-size: 13px !important;
+}
+
+/* Sidebar header con línea de acento cian */
+[data-testid="stSidebar"] h2 {
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    letter-spacing: 2px !important;
+    text-transform: uppercase !important;
+    color: var(--cyan) !important;
+    margin-bottom: 12px !important;
+    padding-bottom: 8px !important;
+    border-bottom: 1px solid var(--border) !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   TIPOGRAFÍA PRINCIPAL
+══════════════════════════════════════════════════════════ */
+h1 {
+    font-family: var(--font-ui) !important;
+    font-size: 1.6rem !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.5px !important;
+    color: var(--text-primary) !important;
+    line-height: 1.2 !important;
+}
+h2 {
+    font-family: var(--font-ui) !important;
+    font-size: 1.05rem !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.2px !important;
+    color: var(--text-primary) !important;
+}
+h3 {
+    font-family: var(--font-ui) !important;
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1.2px !important;
+    color: var(--cyan) !important;
+}
+
+/* Caption */
+[data-testid="stCaptionContainer"] p {
+    color: var(--text-muted) !important;
+    font-size: 12px !important;
+    font-family: var(--font-mono) !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   TABS — estilo de fichas de terminal
+══════════════════════════════════════════════════════════ */
+[data-testid="stTabs"] {
+    border-bottom: 1px solid var(--border) !important;
+}
+[data-testid="stTabs"] button {
+    font-family: var(--font-ui) !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+    padding: 10px 20px !important;
+    border-radius: var(--radius-sm) var(--radius-sm) 0 0 !important;
+    border: none !important;
+    background: transparent !important;
+    color: var(--text-muted) !important;
+    transition: color 0.2s, background 0.2s !important;
+    letter-spacing: 0.2px !important;
+}
+[data-testid="stTabs"] button:hover {
+    color: var(--text-secondary) !important;
+    background: var(--bg-elevated) !important;
+}
+[data-testid="stTabs"] button[aria-selected="true"] {
+    color: var(--cyan) !important;
+    font-weight: 700 !important;
+    background: var(--bg-elevated) !important;
+    border-bottom: 2px solid var(--cyan) !important;
+    box-shadow: 0 -1px 0 0 var(--cyan) inset !important;
+}
+[data-testid="stTabs"] button p,
+[data-testid="stTabs"] button span,
+[data-testid="stTabs"] button div {
+    color: inherit !important;
+    font-weight: inherit !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   MÉTRICAS — tarjetas con borde izquierdo de acento
+══════════════════════════════════════════════════════════ */
+[data-testid="stMetric"] {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    border-left: 3px solid var(--cyan) !important;
+    border-radius: var(--radius-md) !important;
+    padding: 16px 18px !important;
+    box-shadow: var(--shadow-card) !important;
+    transition: border-color 0.2s, box-shadow 0.2s, transform 0.15s !important;
+}
+[data-testid="stMetric"]:hover {
+    border-left-color: var(--cyan) !important;
+    box-shadow: var(--shadow-glow), var(--shadow-card) !important;
+    transform: translateY(-1px) !important;
+}
+[data-testid="stMetricLabel"] p,
+[data-testid="stMetricLabel"] span {
+    color: var(--text-muted) !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1px !important;
+    font-family: var(--font-ui) !important;
+}
+[data-testid="stMetricValue"],
+[data-testid="stMetricValue"] > div {
+    color: var(--text-primary) !important;
+    font-weight: 700 !important;
+    font-size: 1.4rem !important;
+    font-family: var(--font-mono) !important;
+    letter-spacing: -0.5px !important;
+}
+[data-testid="stMetricDelta"],
+[data-testid="stMetricDelta"] svg {
+    color: var(--green) !important;
+    fill: var(--green) !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   INPUTS — bordes sutiles, focus con glow cian
+══════════════════════════════════════════════════════════ */
+[data-testid="stTextInput"] input,
+[data-testid="stNumberInput"] input {
+    background: var(--bg-elevated) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--text-primary) !important;
+    font-family: var(--font-mono) !important;
+    font-size: 13px !important;
+    padding: 8px 12px !important;
+    transition: border-color 0.2s, box-shadow 0.2s !important;
+}
+[data-testid="stTextInput"] input:focus,
+[data-testid="stNumberInput"] input:focus {
+    border-color: var(--cyan-dim) !important;
+    box-shadow: 0 0 0 3px var(--cyan-glow-sm) !important;
+    outline: none !important;
+}
+[data-testid="stTextInput"] label p,
+[data-testid="stNumberInput"] label p,
+[data-testid="stSelectbox"] label p,
+[data-testid="stCheckbox"] label p {
+    color: var(--text-secondary) !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    letter-spacing: 0.3px !important;
+    font-family: var(--font-ui) !important;
+}
+
+/* Selectbox */
+[data-testid="stSelectbox"] > div > div {
+    background: var(--bg-elevated) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--text-primary) !important;
+    font-family: var(--font-mono) !important;
+    font-size: 13px !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   BOTONES — dos variantes: acción principal y descarga
+══════════════════════════════════════════════════════════ */
+.stButton > button {
+    background: var(--bg-elevated) !important;
+    border: 1px solid var(--border-bright) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--text-primary) !important;
+    font-family: var(--font-ui) !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+    height: 2.6em !important;
+    letter-spacing: 0.2px !important;
+    transition: all 0.18s ease !important;
+    width: 100% !important;
+}
+.stButton > button:hover {
+    background: var(--bg-hover) !important;
+    border-color: var(--cyan-dim) !important;
+    color: var(--cyan) !important;
+    box-shadow: 0 0 12px var(--cyan-glow-sm) !important;
+    transform: translateY(-1px) !important;
+}
+.stButton > button:active {
+    transform: translateY(0) !important;
+}
+
+/* Botón primario (type="primary") */
+.stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #0077aa 0%, #00a8cc 100%) !important;
+    border: 1px solid var(--cyan-dim) !important;
+    color: #ffffff !important;
+    box-shadow: 0 2px 12px rgba(0,168,204,0.3) !important;
+}
+.stButton > button[kind="primary"]:hover {
+    background: linear-gradient(135deg, #0088bb 0%, #00c0e0 100%) !important;
+    box-shadow: 0 4px 20px rgba(0,200,240,0.4) !important;
+    color: #ffffff !important;
+    border-color: var(--cyan) !important;
+}
+
+/* Botón de descarga */
+[data-testid="stDownloadButton"] > button {
+    background: transparent !important;
+    border: 1px dashed var(--border-bright) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--text-secondary) !important;
+    font-family: var(--font-ui) !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    height: 2.4em !important;
+    transition: all 0.18s ease !important;
+    width: 100% !important;
+}
+[data-testid="stDownloadButton"] > button:hover {
+    background: rgba(0,212,255,0.06) !important;
+    border-color: var(--cyan-dim) !important;
+    border-style: solid !important;
+    color: var(--cyan) !important;
+}
+[data-testid="stDownloadButton"] > button p,
+[data-testid="stDownloadButton"] > button span {
+    color: inherit !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   EXPANDERS — acordeones con borde izquierdo de color
+══════════════════════════════════════════════════════════ */
+[data-testid="stExpander"] {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-md) !important;
+    margin-bottom: 8px !important;
+    overflow: hidden !important;
+    transition: border-color 0.2s, box-shadow 0.2s !important;
+}
+[data-testid="stExpander"]:hover {
+    border-color: var(--border-bright) !important;
+    box-shadow: 0 2px 16px rgba(0,0,0,0.3) !important;
+}
+[data-testid="stExpander"] summary {
+    padding: 12px 16px !important;
+    background: var(--bg-card) !important;
+}
+[data-testid="stExpander"] summary:hover {
+    background: var(--bg-elevated) !important;
+}
+[data-testid="stExpander"] summary p,
+[data-testid="stExpander"] summary span,
+[data-testid="stExpander"] summary div {
+    color: var(--text-primary) !important;
+    font-family: var(--font-ui) !important;
+    font-size: 13px !important;
+    font-weight: 500 !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   CODE BLOCKS — terminal look
+══════════════════════════════════════════════════════════ */
+[data-testid="stCode"],
+pre, code {
+    font-family: var(--font-mono) !important;
+    font-size: 12px !important;
+    line-height: 1.6 !important;
+    background: #070b12 !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-md) !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   ALERTS / INFO / WARNING / ERROR
+══════════════════════════════════════════════════════════ */
+[data-testid="stAlert"] {
+    border-radius: var(--radius-md) !important;
+    border: none !important;
+    font-family: var(--font-ui) !important;
+}
+[data-testid="stAlert"][data-baseweb="notification"] {
+    padding: 12px 16px !important;
+}
+
+/* Info — cian suave */
+div[data-testid="stAlert"][kind="info"],
+.stAlert > div[data-testid="alertContainer"] {
+    border-left: 3px solid var(--cyan-dim) !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   DIVIDER
+══════════════════════════════════════════════════════════ */
+hr {
+    border: none !important;
+    border-top: 1px solid var(--border) !important;
+    margin: 20px 0 !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   DATAFRAME / TABLE
+══════════════════════════════════════════════════════════ */
+[data-testid="stDataFrame"] {
+    border-radius: var(--radius-md) !important;
+    overflow: hidden !important;
+    border: 1px solid var(--border) !important;
+}
+[data-testid="stTable"] th {
+    background: var(--bg-elevated) !important;
+    color: var(--text-muted) !important;
+    font-family: var(--font-ui) !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 1px !important;
+    padding: 10px 14px !important;
+    border-bottom: 1px solid var(--border) !important;
+}
+[data-testid="stTable"] td {
+    color: var(--text-primary) !important;
+    font-family: var(--font-mono) !important;
+    font-size: 12px !important;
+    padding: 8px 14px !important;
+    border-bottom: 1px solid var(--border) !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   COMPONENTES CUSTOM — para usar con st.markdown HTML
+══════════════════════════════════════════════════════════ */
+
+/* Header de página principal */
+.cn-page-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 20px 24px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-top: 3px solid var(--cyan);
+    border-radius: var(--radius-lg);
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-card);
+}
+.cn-page-header .cn-logo {
+    font-size: 28px;
+    line-height: 1;
+}
+.cn-page-header h1 {
+    margin: 0 !important;
+    font-size: 1.3rem !important;
+    letter-spacing: -0.5px !important;
+}
+.cn-page-header .cn-subtitle {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 3px;
+    letter-spacing: 1px;
+}
+.cn-page-header .cn-version {
+    margin-left: auto;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 12px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--cyan);
+    letter-spacing: 1px;
+    white-space: nowrap;
+}
+
+/* Session status pill */
+.cn-session-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}
+.cn-session-pill.active {
+    background: rgba(16,185,129,0.12);
+    border: 1px solid rgba(16,185,129,0.3);
+    color: var(--green);
+}
+.cn-session-pill.inactive {
+    background: rgba(74,90,114,0.2);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+}
+.cn-session-pill .dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 6px currentColor;
+}
+
+/* Info bar */
+.cn-info-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: rgba(0,212,255,0.05);
+    border: 1px solid rgba(0,212,255,0.15);
+    border-left: 3px solid var(--cyan);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin: 8px 0;
+}
+.cn-info-bar .cn-label {
+    color: var(--cyan);
+    font-weight: 700;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    white-space: nowrap;
+}
+
+/* Section header con ícono y número */
+.cn-section {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    margin: 16px 0 12px 0;
+}
+.cn-section-icon {
+    font-size: 20px;
+    line-height: 1;
+}
+.cn-section-title {
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.2px;
+}
+.cn-section-sub {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* Chip / badge inline */
+.cn-chip {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 20px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    margin: 2px;
+    letter-spacing: 0.5px;
+}
+.cn-chip-cyan   { background: rgba(0,212,255,0.12); color: var(--cyan); border: 1px solid rgba(0,212,255,0.25); }
+.cn-chip-green  { background: rgba(16,185,129,0.12); color: var(--green); border: 1px solid rgba(16,185,129,0.25); }
+.cn-chip-amber  { background: rgba(245,158,11,0.12); color: var(--amber); border: 1px solid rgba(245,158,11,0.25); }
+.cn-chip-red    { background: rgba(239,68,68,0.12); color: var(--red); border: 1px solid rgba(239,68,68,0.25); }
+.cn-chip-gray   { background: rgba(74,90,114,0.2); color: var(--text-secondary); border: 1px solid var(--border); }
+
+/* Device card para switches/routers */
+.cn-device-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: 14px 18px;
+    margin-bottom: 8px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    position: relative;
+    overflow: hidden;
+}
+.cn-device-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 3px; height: 100%;
+    background: var(--cyan);
+    opacity: 0.6;
+}
+.cn-device-card:hover {
+    border-color: var(--border-bright);
+    box-shadow: var(--shadow-glow);
+}
+.cn-device-card .cn-device-host {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.3px;
+}
+.cn-device-card .cn-device-ip {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--cyan);
+    margin-top: 2px;
+}
+.cn-device-card .cn-device-meta {
+    font-family: var(--font-ui);
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 6px;
+}
+
+/* Resumen de sesión header */
+.cn-resumen-hero {
+    background: linear-gradient(135deg, #080e1a 0%, #0d1829 60%, #101e35 100%);
+    border: 1px solid var(--border);
+    border-top: 2px solid var(--cyan);
+    border-radius: var(--radius-lg);
+    padding: 28px 32px;
+    margin-bottom: 20px;
+    position: relative;
+    overflow: hidden;
+}
+.cn-resumen-hero::after {
+    content: 'CORE-NEXUS';
+    position: absolute;
+    right: 32px; top: 50%;
+    transform: translateY(-50%);
+    font-family: var(--font-mono);
+    font-size: 48px;
+    font-weight: 700;
+    color: rgba(0,212,255,0.04);
+    letter-spacing: -2px;
+    pointer-events: none;
+    user-select: none;
+}
+.cn-resumen-hero h2 {
+    color: var(--text-primary) !important;
+    font-size: 1.4rem !important;
+    font-weight: 700 !important;
+    margin: 0 0 6px 0 !important;
+    letter-spacing: -0.5px !important;
+}
+.cn-resumen-hero .cn-meta {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+}
+
+/* Formateo cards */
+.cn-fmt-card {
+    border-radius: var(--radius-md);
+    padding: 18px 20px;
+    height: 100%;
+    font-size: 13px;
+    line-height: 1.6;
+    font-family: var(--font-ui);
+    transition: transform 0.15s, box-shadow 0.2s;
+}
+.cn-fmt-card:hover { transform: translateY(-2px); }
+.cn-fmt-blue  { background: rgba(0,119,170,0.1);  border: 1px solid rgba(0,168,255,0.25); }
+.cn-fmt-amber { background: rgba(180,90,0,0.1);   border: 1px solid rgba(245,158,11,0.3); }
+.cn-fmt-red   { background: rgba(127,20,20,0.15); border: 1px solid rgba(239,68,68,0.35); }
+.cn-fmt-title { font-size: 14px; font-weight: 700; margin-bottom: 10px; letter-spacing: -0.2px; }
+.cn-fmt-body  { color: var(--text-secondary); font-size: 12.5px; }
+.cn-fmt-warn  { font-weight: 600; font-size: 12px; margin-top: 10px; }
+
+/* ══════════════════════════════════════════════════════════
+   MODO CLARO — cobertura completa de todos los elementos
+══════════════════════════════════════════════════════════ */
+
+/* Variables redefinidas para modo claro */
+[data-theme="light"] {
+    --bg-base:        #f0f4fa;
+    --bg-card:        #ffffff;
+    --bg-elevated:    #e8eef8;
+    --bg-hover:       #dce6f5;
+    --border:         #c4d4e8;
+    --border-bright:  #94b4d4;
+    --cyan:           #0066aa;
+    --cyan-dim:       #004e88;
+    --cyan-glow:      rgba(0,102,170,0.12);
+    --cyan-glow-sm:   rgba(0,102,170,0.07);
+    --green:          #0a7a4a;
+    --amber:          #996600;
+    --red:            #bb1a22;
+    --text-primary:   #0f1e38;
+    --text-secondary: #2c4466;
+    --text-muted:     #6080a0;
+    --shadow-card:    0 2px 12px rgba(0,40,100,0.10);
+    --shadow-glow:    0 0 16px rgba(0,102,170,0.10);
+}
+
+/* App background */
+[data-theme="light"] .stApp {
+    background: linear-gradient(160deg, #e4ecf8 0%, #f0f4fa 50%, #e8f0f8 100%) !important;
+}
+
+/* ── Texto general ── */
+[data-theme="light"] p,
+[data-theme="light"] span,
+[data-theme="light"] div,
+[data-theme="light"] label {
+    color: var(--text-primary) !important;
+}
+
+/* Títulos */
+[data-theme="light"] h1,
+[data-theme="light"] h2,
+[data-theme="light"] h3,
+[data-theme="light"] h4 {
+    color: var(--text-primary) !important;
+}
+
+/* h3 override — mantener cian pero oscuro */
+[data-theme="light"] h3 {
+    color: var(--cyan) !important;
+}
+
+/* ── Sidebar ── */
+[data-theme="light"] [data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #dae4f4 0%, #e8f0fa 100%) !important;
+    border-right: 1px solid var(--border) !important;
+}
+[data-theme="light"] [data-testid="stSidebar"] p,
+[data-theme="light"] [data-testid="stSidebar"] span,
+[data-theme="light"] [data-testid="stSidebar"] label,
+[data-theme="light"] [data-testid="stSidebar"] div {
+    color: var(--text-secondary) !important;
+}
+[data-theme="light"] [data-testid="stSidebar"] h2 {
+    color: var(--cyan) !important;
+    border-bottom-color: var(--border) !important;
+}
+
+/* ── Captions ── */
+[data-theme="light"] [data-testid="stCaptionContainer"] p {
+    color: var(--text-muted) !important;
+}
+
+/* ── Métricas ── */
+[data-theme="light"] [data-testid="stMetric"] {
+    background: #ffffff !important;
+    border: 1px solid var(--border) !important;
+    border-left: 3px solid var(--cyan) !important;
+    box-shadow: var(--shadow-card) !important;
+}
+[data-theme="light"] [data-testid="stMetricLabel"] p,
+[data-theme="light"] [data-testid="stMetricLabel"] span {
+    color: var(--text-muted) !important;
+}
+[data-theme="light"] [data-testid="stMetricValue"],
+[data-theme="light"] [data-testid="stMetricValue"] > div {
+    color: var(--text-primary) !important;
+}
+[data-theme="light"] [data-testid="stMetricDelta"],
+[data-theme="light"] [data-testid="stMetricDelta"] svg {
+    color: var(--green) !important;
+    fill: var(--green) !important;
+}
+
+/* ── Inputs ── */
+[data-theme="light"] [data-testid="stTextInput"] input,
+[data-theme="light"] [data-testid="stNumberInput"] input {
+    background: #ffffff !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+}
+[data-theme="light"] [data-testid="stTextInput"] label p,
+[data-theme="light"] [data-testid="stNumberInput"] label p,
+[data-theme="light"] [data-testid="stSelectbox"] label p,
+[data-theme="light"] [data-testid="stCheckbox"] label p {
+    color: var(--text-secondary) !important;
+}
+
+/* Selectbox */
+[data-theme="light"] [data-testid="stSelectbox"] > div > div {
+    background: #ffffff !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+}
+[data-theme="light"] [data-testid="stSelectbox"] > div > div > div {
+    color: var(--text-primary) !important;
+}
+
+/* Checkbox */
+[data-theme="light"] [data-testid="stCheckbox"] span {
+    color: var(--text-primary) !important;
+}
+
+/* ── Tabs ── */
+[data-theme="light"] [data-testid="stTabs"] button p,
+[data-theme="light"] [data-testid="stTabs"] button span,
+[data-theme="light"] [data-testid="stTabs"] button div {
+    color: var(--text-muted) !important;
+}
+[data-theme="light"] [data-testid="stTabs"] button[aria-selected="true"] p,
+[data-theme="light"] [data-testid="stTabs"] button[aria-selected="true"] span,
+[data-theme="light"] [data-testid="stTabs"] button[aria-selected="true"] div {
+    color: var(--cyan) !important;
+    font-weight: 700 !important;
+}
+[data-theme="light"] [data-testid="stTabs"] button[aria-selected="true"] {
+    border-bottom: 2px solid var(--cyan) !important;
+}
+
+/* ── Botones ── */
+[data-theme="light"] .stButton > button {
+    background: #ffffff !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+}
+[data-theme="light"] .stButton > button p,
+[data-theme="light"] .stButton > button span,
+[data-theme="light"] .stButton > button div {
+    color: var(--text-primary) !important;
+}
+[data-theme="light"] .stButton > button:hover {
+    background: var(--bg-elevated) !important;
+    border-color: var(--cyan-dim) !important;
+    color: var(--cyan) !important;
+}
+[data-theme="light"] .stButton > button[kind="primary"] {
+    background: linear-gradient(135deg, #0066aa 0%, #0088cc 100%) !important;
+    color: #ffffff !important;
+    border-color: var(--cyan-dim) !important;
+}
+[data-theme="light"] .stButton > button[kind="primary"] p,
+[data-theme="light"] .stButton > button[kind="primary"] span {
+    color: #ffffff !important;
+}
+
+/* Botón descarga */
+[data-theme="light"] [data-testid="stDownloadButton"] > button {
+    background: transparent !important;
+    border: 1px dashed var(--border-bright) !important;
+    color: var(--text-secondary) !important;
+}
+[data-theme="light"] [data-testid="stDownloadButton"] > button p,
+[data-theme="light"] [data-testid="stDownloadButton"] > button span {
+    color: var(--text-secondary) !important;
+}
+[data-theme="light"] [data-testid="stDownloadButton"] > button:hover {
+    background: var(--bg-elevated) !important;
+    border-color: var(--cyan-dim) !important;
+    border-style: solid !important;
+    color: var(--cyan) !important;
+}
+
+/* ── Expanders ── */
+[data-theme="light"] [data-testid="stExpander"] {
+    background: #ffffff !important;
+    border: 1px solid var(--border) !important;
+}
+[data-theme="light"] [data-testid="stExpander"] summary {
+    background: #ffffff !important;
+}
+[data-theme="light"] [data-testid="stExpander"] summary:hover {
+    background: var(--bg-elevated) !important;
+}
+[data-theme="light"] [data-testid="stExpander"] summary p,
+[data-theme="light"] [data-testid="stExpander"] summary span,
+[data-theme="light"] [data-testid="stExpander"] summary div {
+    color: var(--text-primary) !important;
+}
+
+/* ── Code / text_area ── */
+[data-theme="light"] [data-testid="stCode"],
+[data-theme="light"] pre,
+[data-theme="light"] code {
+    background: #f0f4fc !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+}
+[data-theme="light"] textarea {
+    background: #f4f7fc !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text-primary) !important;
+}
+[data-theme="light"] [data-testid="stTextArea"] textarea {
+    background: #f4f7fc !important;
+    color: var(--text-primary) !important;
+}
+
+/* ── Alerts ── */
+[data-theme="light"] [data-testid="stAlert"] {
+    background: rgba(0,102,170,0.06) !important;
+}
+[data-theme="light"] [data-testid="stAlert"] p,
+[data-theme="light"] [data-testid="stAlert"] span,
+[data-theme="light"] [data-testid="stAlert"] div {
+    color: var(--text-primary) !important;
+}
+
+/* ── Tablas ── */
+[data-theme="light"] [data-testid="stTable"] {
+    background: #ffffff !important;
+}
+[data-theme="light"] [data-testid="stTable"] th {
+    background: var(--bg-elevated) !important;
+    color: var(--text-muted) !important;
+}
+[data-theme="light"] [data-testid="stTable"] td {
+    color: var(--text-primary) !important;
+    background: #ffffff !important;
+}
+[data-theme="light"] [data-testid="stTable"] tr:nth-child(even) td {
+    background: #f6f9fe !important;
+}
+
+/* ── Dataframe ── */
+[data-theme="light"] [data-testid="stDataFrame"] {
+    background: #ffffff !important;
+    border: 1px solid var(--border) !important;
+}
+
+/* ── Divider ── */
+[data-theme="light"] hr {
+    border-top: 1px solid var(--border) !important;
+}
+
+/* ── Componentes custom HTML ── */
+[data-theme="light"] .cn-page-header {
+    background: #ffffff !important;
+    border-color: var(--border) !important;
+    box-shadow: 0 2px 12px rgba(0,40,100,0.08) !important;
+}
+[data-theme="light"] .cn-info-bar {
+    background: rgba(0,102,170,0.06) !important;
+    border-color: rgba(0,102,170,0.2) !important;
+    color: var(--text-secondary) !important;
+}
+[data-theme="light"] .cn-section {
+    background: #ffffff !important;
+    border-color: var(--border) !important;
+}
+[data-theme="light"] .cn-section-title {
+    color: var(--text-primary) !important;
+}
+[data-theme="light"] .cn-resumen-hero {
+    background: linear-gradient(135deg, #dae8f8 0%, #e8f2fc 60%, #f0f6fe 100%) !important;
+    border-color: var(--border) !important;
+}
+[data-theme="light"] .cn-resumen-hero h2 {
+    color: var(--text-primary) !important;
+}
+[data-theme="light"] .cn-resumen-hero::after {
+    color: rgba(0,102,170,0.05) !important;
+}
+[data-theme="light"] .cn-device-card {
+    background: #ffffff !important;
+    border-color: var(--border) !important;
+}
+[data-theme="light"] .cn-device-card .cn-device-host {
+    color: var(--text-primary) !important;
+}
+[data-theme="light"] .cn-session-pill.inactive {
+    background: rgba(96,128,160,0.12) !important;
+    border-color: var(--border) !important;
+    color: var(--text-muted) !important;
+}
+[data-theme="light"] .cn-chip-gray {
+    background: rgba(96,128,160,0.12) !important;
+    color: var(--text-secondary) !important;
+    border-color: var(--border) !important;
+}
+[data-theme="light"] .cn-fmt-blue {
+    background: rgba(0,100,180,0.07) !important;
+    border-color: rgba(0,120,200,0.25) !important;
+}
+[data-theme="light"] .cn-fmt-amber {
+    background: rgba(160,80,0,0.07) !important;
+    border-color: rgba(200,120,0,0.25) !important;
+}
+[data-theme="light"] .cn-fmt-red {
+    background: rgba(180,0,0,0.07) !important;
+    border-color: rgba(200,20,20,0.3) !important;
+}
+
+/* ══════════════════════════════════════════════════════════
+   SCROLLBAR
+══════════════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--bg-base); }
+::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--cyan-dim); }
+
+/* ══════════════════════════════════════════════════════════
+   LEGACY OVERRIDES
+══════════════════════════════════════════════════════════ */
+[data-theme="dark"] [data-testid="stAlert"] p,
+[data-theme="dark"] [data-testid="stAlert"] span { color: inherit !important; }
+
+</style>
+""", unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
 # CONSTANTES
@@ -224,6 +1084,7 @@ def cmds_routing_ipv4(vendor: str, protocolo: str, ipv4: str,
     if vendor == "Cisco":
         if protocolo == "RIP v2":
             cmds.extend([
+                "! ── Prefijo para bloquear anuncio de red admin ──",
                 f"ip prefix-list BLOCK_MGMT seq 5 deny {IP_BASE_1}.{IP_BASE_2}.{IP_ADMIN_OCTETO}.0/24",
                 "ip prefix-list BLOCK_MGMT seq 10 permit 0.0.0.0/0 le 32",
                 "router rip",
@@ -235,12 +1096,13 @@ def cmds_routing_ipv4(vendor: str, protocolo: str, ipv4: str,
             ])
         elif protocolo == "EIGRP":
             cmds.extend([
+                "! ── Prefijo para bloquear anuncio de red admin ──",
                 f"ip prefix-list BLOCK_MGMT seq 5 deny {IP_BASE_1}.{IP_BASE_2}.{IP_ADMIN_OCTETO}.0/24",
                 "ip prefix-list BLOCK_MGMT seq 10 permit 0.0.0.0/0 le 32",
                 f"router eigrp {as_number}",
                 f" network {red} 0.0.0.255",
                 " no auto-summary",
-                f" distribute-list prefix BLOCK_MGMT out",
+                " distribute-list prefix BLOCK_MGMT out",
                 " exit",
             ])
         elif protocolo == "BGP":
@@ -483,18 +1345,19 @@ def cmds_alta_disponibilidad(vendor: str, vlan: int, ipv4: str,
                 "# ── HA 3: Rapid PVST+ + EtherChannel LACP ──",
                 f"spanning-tree mode {STP_MODE_CISCO}",
                 f"spanning-tree vlan {vlan} priority {'4096' if es_activo else '8192'}",
+                "! Aplicar PortFast solo en puertos de acceso (no en uplinks):",
                 "interface range GigabitEthernet0/1 - 2",
                 " spanning-tree portfast",
                 " spanning-tree bpduguard enable",
                 " exit",
+                "! EtherChannel LACP en puertos de uplink:",
                 f"interface range GigabitEthernet0/3 - 4",
                 f" channel-group {LACP_CHANNEL_GROUP} mode active",
                 " exit",
                 f"interface port-channel {LACP_CHANNEL_GROUP}",
-                f" switchport mode trunk",
+                " switchport mode trunk",
                 f" switchport trunk allowed vlan {vlan}",
                 " exit",
-                f"bfd interval {BFD_INTERVAL} min_rx {BFD_INTERVAL} multiplier {BFD_MULTIPLIER}",
             ])
 
     elif vendor == "Huawei":
@@ -508,13 +1371,6 @@ def cmds_alta_disponibilidad(vendor: str, vlan: int, ipv4: str,
                 f" vrrp vrid {HSRP_GRUPO} timer advertise {HSRP_HELLO * 1000}",
                 " quit",
             ])
-            if ipv6:
-                cmds.extend([
-                    f"interface Vlanif{vlan}",
-                    f" vrrp6 vrid {HSRP_GRUPO} virtual-ip fe80::FFFE link-local",
-                    f" vrrp6 vrid {HSRP_GRUPO} priority {prioridad}",
-                    " quit",
-                ])
         if aplicar_ipsla:
             cmds.extend([
                 "# ── HA 2: NQA + Track — Rutas de Respaldo ──",
@@ -539,21 +1395,18 @@ def cmds_alta_disponibilidad(vendor: str, vlan: int, ipv4: str,
                 " active region-configuration",
                 " quit",
                 f"stp instance 1 priority {'4096' if es_activo else '8192'}",
+                "! Edged-port equivalente a PortFast — solo en puertos de acceso:",
                 "interface GigabitEthernet0/0/1",
                 " stp edged-port enable",
-                " stp bpdu-protection",
                 " quit",
+                "stp bpdu-protection",
+                "! EtherChannel LACP:",
                 f"interface Eth-Trunk {LACP_CHANNEL_GROUP}",
                 " mode lacp-static",
-                f" trunkport GigabitEthernet 0/0/3",
-                f" trunkport GigabitEthernet 0/0/4",
-                f" port link-type trunk",
+                " trunkport GigabitEthernet 0/0/3",
+                " trunkport GigabitEthernet 0/0/4",
+                " port link-type trunk",
                 f" port trunk allow-pass vlan {vlan}",
-                " quit",
-                f"bfd",
-                " quit",
-                f"interface Vlanif{vlan}",
-                f" bfd min-tx-interval {BFD_INTERVAL} min-rx-interval {BFD_INTERVAL} detect-multiplier {BFD_MULTIPLIER}",
                 " quit",
             ])
 
@@ -763,22 +1616,41 @@ def cmds_vlan_admin(vendor: str, vlan_admin: int, ip_admin: str, host: str) -> l
     cmds = []
     if vendor == "Cisco":
         cmds.extend([
-            "# ── VLAN ADMINISTRATIVA + SSH ──",
-            f"vlan {vlan_admin}", " name VLAN_ADMIN_MGMT", " exit",
-            f"interface vlan {vlan_admin}",
-            f" ip address {ip_admin} {SUBNET_MASK}", " no shutdown", " exit",
+            "enable",
             "crypto key generate rsa modulus 2048",
-            "ip ssh version 2", "ip ssh time-out 60", "ip ssh authentication-retries 3",
+            "yes",
+            "configure terminal",
+            f"hostname {host}",
+            f"vlan {vlan_admin}",
+            " name VLAN_ADMIN_MGMT",
+            " exit",
+            f"interface vlan {vlan_admin}",
+            f" ip address {ip_admin} {SUBNET_MASK}",
+            " no shutdown",
+            " exit",
+            "ip ssh version 2",
+            "ip ssh time-out 60",
+            "ip ssh authentication-retries 3",
             f"username {SSH_USER} privilege 15 secret {SSH_PASS}",
-            "line vty 0 4", " transport input ssh", " login local", " exec-timeout 10 0", " exit",
+            "line vty 0 4",
+            " transport input ssh",
+            " login local",
+            " exec-timeout 10 0",
+            " exit",
         ])
     elif vendor == "Huawei":
         cmds.extend([
-            "# ── VLAN ADMINISTRATIVA + SSH ──",
-            f"vlan {vlan_admin}", f" description VLAN_ADMIN_MGMT", " quit",
+            "system-view",
+            f"sysname {host}",
+            f"vlan {vlan_admin}",
+            f" description VLAN_ADMIN_MGMT",
+            " quit",
             f"interface Vlanif{vlan_admin}",
-            f" ip address {ip_admin} {SUBNET_MASK}", " quit",
-            "rsa local-key-pair create", "2048",
+            f" ip address {ip_admin} {SUBNET_MASK}",
+            " quit",
+            "rsa local-key-pair create",
+            "2048",
+            "y",
             "stelnet server enable",
             "aaa",
             f" local-user {SSH_USER} password irreversible-cipher {SSH_PASS}",
@@ -786,7 +1658,10 @@ def cmds_vlan_admin(vendor: str, vlan_admin: int, ip_admin: str, host: str) -> l
             f" local-user {SSH_USER} privilege level 15",
             " quit",
             "user-interface vty 0 4",
-            " authentication-mode aaa", " protocol inbound ssh", " idle-timeout 10 0", " quit",
+            " authentication-mode aaa",
+            " protocol inbound ssh",
+            " idle-timeout 10 0",
+            " quit",
         ])
     elif vendor == "Fortinet":
         cmds.extend([
@@ -806,6 +1681,66 @@ def cmds_vlan_admin(vendor: str, vlan_admin: int, ip_admin: str, host: str) -> l
             "        set vdom root",
             "    next", "end",
             "config system global", "    set admin-ssh-port 22", "end",
+        ])
+    return cmds
+
+
+def cmds_ssh_router(vendor: str, host: str) -> list:
+    """
+    Genera SOLO los comandos de hostname + SSH para routers.
+    Sin VLANs ni interfaces de gestión — el router usa sus propias
+    interfaces físicas LAN/WAN para acceso SSH.
+    """
+    cmds = []
+    if vendor == "Cisco":
+        cmds.extend([
+            "enable",
+            "crypto key generate rsa modulus 2048",
+            "yes",
+            "configure terminal",
+            f"hostname {host}",
+            "ip ssh version 2",
+            "ip ssh time-out 60",
+            "ip ssh authentication-retries 3",
+            f"username {SSH_USER} privilege 15 secret {SSH_PASS}",
+            "line vty 0 4",
+            " transport input ssh",
+            " login local",
+            " exec-timeout 10 0",
+            " exit",
+        ])
+    elif vendor == "Huawei":
+        cmds.extend([
+            "system-view",
+            f"sysname {host}",
+            "rsa local-key-pair create",
+            "2048",
+            "y",
+            "stelnet server enable",
+            "aaa",
+            f" local-user {SSH_USER} password irreversible-cipher {SSH_PASS}",
+            f" local-user {SSH_USER} service-type ssh",
+            f" local-user {SSH_USER} privilege level 15",
+            " quit",
+            "user-interface vty 0 4",
+            " authentication-mode aaa",
+            " protocol inbound ssh",
+            " idle-timeout 10 0",
+            " quit",
+        ])
+    elif vendor == "Fortinet":
+        cmds.extend([
+            "config system global",
+            f"    set hostname {host}",
+            "    set admin-ssh-port 22",
+            "end",
+            "config system admin",
+            f"    edit {SSH_USER}",
+            f"        set password {SSH_PASS}",
+            "        set accprofile super_admin",
+            "        set vdom root",
+            "    next",
+            "end",
         ])
     return cmds
 
@@ -831,14 +1766,21 @@ def generar_config_switch(vendor: str, host: str,
     dep, rb = [], []
 
     if vendor == "Cisco":
-        dep.extend(["enable", "configure terminal", f"hostname {host}"])
-        # Excluir IPs de DHCP de todas las VLANs
+        # cmds_admin_precalc ya incluye: enable, crypto key, configure terminal, hostname,
+        # vlan admin, SSH config. Solo agregamos DHCP excludes y luego las VLANs de datos.
+        dep.extend(cmds_admin_precalc)
+
+        # Excluir gateways e IPs de gestión del pool DHCP de cada VLAN de datos
+        dep.append("! ── Exclusiones DHCP (gateways reservados) ──")
         for vc in vlans_config:
             red = ".".join(vc["ipv4"].split('.')[:3])
             dep.append(f"ip dhcp excluded-address {red}.1 {red}.10")
 
-        dep.extend(cmds_admin_precalc)
+        # Habilitar routing IPv6 global si alguna VLAN lo usa
+        if any(vc.get("ipv6") for vc in vlans_config):
+            dep.append("ipv6 unicast-routing")
 
+        dep.append("! ── VLANs de datos ──")
         for vc in vlans_config:
             dep.extend([
                 f"vlan {vc['vlan']}",
@@ -848,9 +1790,13 @@ def generar_config_switch(vendor: str, host: str,
                 f" ip address {vc['ipv4']} {SUBNET_MASK}",
             ])
             if vc.get("ipv6"):
-                dep.append(f" ipv6 address {vc['ipv6'].split('/')[0]}/64")
+                # Formato correcto: la dirección ya incluye /64, no duplicar
+                ipv6_clean = vc['ipv6'] if '/64' in vc['ipv6'] else vc['ipv6'].split('/')[0] + '/64'
+                dep.append(f" ipv6 address {ipv6_clean}")
+                dep.append(" ipv6 enable")
             dep.extend([
-                " no shutdown", " exit",
+                " no shutdown",
+                " exit",
                 f"ip dhcp pool POOL_{vc['vlan']}",
                 f" network {'.'.join(vc['ipv4'].split('.')[:3])}.0 {SUBNET_MASK}",
                 f" default-router {vc['ipv4']}",
@@ -946,12 +1892,14 @@ def generar_config_router(vendor: str, ipv4: str, ipv6: str | None,
     ip_wan_gw = f"{IP_BASE_1}.{IP_BASE_2}.{IP_ADMIN_OCTETO}.254"
 
     if vendor == "Cisco":
-        dep.extend(["enable", "configure terminal", f"hostname {host}", "# ── Gestión SSH ──"])
-        dep.extend(cmds_admin_precalc)
+        dep.extend(cmds_ssh_router(vendor, host))
+        if ipv6:
+            dep.append("ipv6 unicast-routing")
         dep.extend([
             "interface GigabitEthernet0/0",
             f" ip address {ipv4} {SUBNET_MASK}",
-            " description LAN", " no shutdown",
+            " description LAN",
+            " no shutdown",
         ])
         if ipv6:
             dep.extend([f" ipv6 address {ipv6.split('/')[0]}/64", " ipv6 enable"])
@@ -984,10 +1932,9 @@ def generar_config_router(vendor: str, ipv4: str, ipv6: str | None,
         ])
 
     elif vendor == "Huawei":
-        dep.extend(["system-view", f"sysname {host}"])
+        dep.extend(cmds_ssh_router(vendor, host))
         if ipv6:
             dep.append("ipv6")
-        dep.extend(cmds_admin_precalc)
         dep.extend([
             "interface GigabitEthernet0/0/0",
             f" ip address {ipv4} {SUBNET_MASK}", " description LAN",
@@ -1022,8 +1969,7 @@ def generar_config_router(vendor: str, ipv4: str, ipv6: str | None,
         ])
 
     elif vendor == "Fortinet":
-        dep.extend(["config system global", f"    set hostname {host}", "end"])
-        dep.extend(cmds_admin_precalc)
+        dep.extend(cmds_ssh_router(vendor, host))
         dep.extend([
             "config system interface",
             "    edit internal",
@@ -1079,22 +2025,34 @@ def generar_config_firewall(vendor_fw: str, host_fw: str,
 
     if vendor_fw == "Cisco ASA":
         dep.extend([
-            "enable", "configure terminal", f"hostname {host_fw}",
+            "enable",
+            "crypto key generate rsa modulus 2048",
+            "yes",
+            "configure terminal",
+            f"hostname {host_fw}",
             "interface GigabitEthernet0/0",
-            " nameif outside", " security-level 0",
-            f" ip address {ip_wan} {SUBNET_MASK}", " no shutdown", " exit",
+            " nameif outside",
+            " security-level 0",
+            f" ip address {ip_wan} {SUBNET_MASK}",
+            " no shutdown",
+            " exit",
             "interface GigabitEthernet0/1",
-            " nameif inside", " security-level 100",
-            f" ip address {ip_lan} {SUBNET_MASK}", " no shutdown", " exit",
+            " nameif inside",
+            " security-level 100",
+            f" ip address {ip_lan} {SUBNET_MASK}",
+            " no shutdown",
+            " exit",
             "object network LAN_NET",
             f" subnet {'.'.join(ip_lan.split('.')[:3])}.0 {SUBNET_MASK}",
-            " nat (inside,outside) dynamic interface", " exit",
+            " nat (inside,outside) dynamic interface",
+            " exit",
             "access-list INSIDE_OUT extended permit ip any any",
             "access-group INSIDE_OUT in interface inside",
-            "crypto key generate rsa modulus 2048", "ip ssh version 2",
+            "ip ssh version 2",
             f"username {SSH_USER} privilege 15 password {SSH_PASS}",
             f"ssh {'.'.join(ip_lan.split('.')[:3])}.0 255.255.255.0 inside",
-            "ssh timeout 10", "aaa authentication ssh console LOCAL",
+            "ssh timeout 10",
+            "aaa authentication ssh console LOCAL",
             "route outside 0.0.0.0 0.0.0.0 " + ".".join(ip_wan.split('.')[:3]) + ".254 1",
         ])
         if ipv6:
@@ -1111,26 +2069,53 @@ def generar_config_firewall(vendor_fw: str, host_fw: str,
 
     elif vendor_fw == "Huawei USG":
         dep.extend([
-            "system-view", f"sysname {host_fw}",
-            "firewall zone untrust", " set priority 5", " quit",
-            "firewall zone trust", " set priority 85", " quit",
+            "system-view",
+            f"sysname {host_fw}",
+            "firewall zone untrust",
+            " set priority 5",
+            " quit",
+            "firewall zone trust",
+            " set priority 85",
+            " quit",
             "interface GigabitEthernet0/0/0",
-            f" ip address {ip_wan} {SUBNET_MASK}", " alias WAN", " quit",
-            "firewall zone untrust", " add interface GigabitEthernet0/0/0", " quit",
+            f" ip address {ip_wan} {SUBNET_MASK}",
+            " alias WAN",
+            " quit",
+            "firewall zone untrust",
+            " add interface GigabitEthernet0/0/0",
+            " quit",
             "interface GigabitEthernet0/0/1",
-            f" ip address {ip_lan} {SUBNET_MASK}", " alias LAN", " quit",
-            "firewall zone trust", " add interface GigabitEthernet0/0/1", " quit",
+            f" ip address {ip_lan} {SUBNET_MASK}",
+            " alias LAN",
+            " quit",
+            "firewall zone trust",
+            " add interface GigabitEthernet0/0/1",
+            " quit",
             f"nat address-group 1 {ip_wan} {ip_wan}",
             "nat-policy interzone trust untrust outbound",
-            " policy 1", "  action source-nat", f"  address-group 1", " quit", " quit",
+            " policy 1",
+            "  action source-nat",
+            f"  address-group 1",
+            " quit",
+            " quit",
             "policy interzone trust untrust outbound",
-            " policy 1", "  action permit", " quit", " quit",
-            "rsa local-key-pair create", "2048", "stelnet server enable",
+            " policy 1",
+            "  action permit",
+            " quit",
+            " quit",
+            "rsa local-key-pair create",
+            "2048",
+            "y",
+            "stelnet server enable",
             "aaa",
             f" local-user {SSH_USER} password irreversible-cipher {SSH_PASS}",
             f" local-user {SSH_USER} service-type ssh",
-            f" local-user {SSH_USER} privilege level 15", " quit",
-            "user-interface vty 0 4", " authentication-mode aaa", " protocol inbound ssh", " quit",
+            f" local-user {SSH_USER} privilege level 15",
+            " quit",
+            "user-interface vty 0 4",
+            " authentication-mode aaa",
+            " protocol inbound ssh",
+            " quit",
         ])
         if ipv6:
             dep.extend(["ipv6", "interface GigabitEthernet0/0/1", f" ipv6 address {ipv6.replace('/64', ' 64')}", " quit"])
@@ -1243,33 +2228,51 @@ if "vista_resumen" not in st.session_state:
 # =============================================================================
 
 if st.session_state.vista_resumen:
-    st.title("📋 Resumen Completo de Sesión")
+    st.markdown("""
+    <div class="cn-page-header">
+        <div class="cn-logo">📋</div>
+        <div>
+            <h1 style="margin:0; font-size:1.2rem; color:#e2e8f0; font-weight:700;">RESUMEN DE SESIÓN</h1>
+            <div class="cn-subtitle">CORE-NEXUS ENTERPRISE &nbsp;·&nbsp; HISTORIAL COMPLETO</div>
+        </div>
+        <div class="cn-version">v4.3</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-    if st.button("← Volver a la configuración", use_container_width=False):
-        st.session_state.vista_resumen = False
-        st.rerun()
+    col_back, col_dl = st.columns([1, 3])
+    with col_back:
+        if st.button("← Volver a configuración", use_container_width=True):
+            st.session_state.vista_resumen = False
+            st.rerun()
 
     if st.session_state.sesion_activa is None or not st.session_state.sesion_confirmada:
-        st.warning("No hay sesión activa. Vuelve a la configuración para iniciar una.")
+        st.markdown("""
+        <div class="cn-info-bar" style="border-left-color:#f59e0b;">
+            <span class="cn-label" style="color:#f59e0b;">⚠ Atención</span>
+            No hay sesión activa. Vuelve a la configuración para iniciar una.
+        </div>""", unsafe_allow_html=True)
         st.stop()
 
     s = st.session_state.sesion_activa
 
-    # ── Header ──
+    ultima_accion = s.get('log', [{}])[-1].get('ts','—') if s.get('log') else '—'
+    st.markdown(f"""
+    <div class="cn-resumen-hero">
+        <div style="display:flex; align-items:center; gap:14px; margin-bottom:8px;">
+            <span style="font-size:24px;">🛡️</span>
+            <h2>{s['proyecto']}</h2>
+            <span class="cn-chip cn-chip-cyan" style="margin-left:auto;">RESUMEN DE SESIÓN</span>
+        </div>
+        <div class="cn-meta">
+            Creada: {s.get('creada','—')} &nbsp;·&nbsp; Última actividad: {ultima_accion}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
     total_sw = len(s.get("switches", []))
     total_rt = len(s.get("routers", []))
     total_fw = len(s.get("firewalls", []))
     total_vl = len(s.get("vlans_globales", []))
-
-    st.markdown(f"""
-    <div class="resumen-header">
-        <h2 style="color:#e8f0fe; margin:0 0 8px 0;">🛡️ {s['proyecto']}</h2>
-        <p style="color:#a8b8d0; margin:0; font-size:14px;">
-            Sesión creada: {s.get('creada','—')} &nbsp;|&nbsp;
-            Última actualización: {s.get('log', [{}])[-1].get('ts','—') if s.get('log') else '—'}
-        </p>
-    </div>
-    """, unsafe_allow_html=True)
 
     # ── Métricas globales ──
     mc1, mc2, mc3, mc4, mc5 = st.columns(5)
@@ -1283,14 +2286,14 @@ if st.session_state.vista_resumen:
 
     # ── VLANs configuradas ──
     if s.get("vlans_globales"):
-        st.subheader("🌐 VLANs Configuradas")
+        st.markdown('<div class="cn-section"><div class="cn-section-icon">🌐</div><div><div class="cn-section-title">VLANs Configuradas</div></div></div>', unsafe_allow_html=True)
         df_vl = pd.DataFrame(s["vlans_globales"])
         st.dataframe(df_vl, use_container_width=True, hide_index=True)
         st.divider()
 
     # ── Switches ──
     if s.get("switches"):
-        st.subheader("🖧 Switches Configurados")
+        st.markdown('<div class="cn-section"><div class="cn-section-icon">🖧</div><div><div class="cn-section-title">Switches Configurados</div></div></div>', unsafe_allow_html=True)
         for sw in s["switches"]:
             with st.expander(
                 f"🖧 {sw['host']}  —  {sw['vendor']}  —  {len(sw['vlans'])} VLAN(s)  —  {sw.get('ts','')}"
@@ -1325,9 +2328,9 @@ if st.session_state.vista_resumen:
                 )
                 td, tr = st.tabs(["📄 Deploy", "⏪ Rollback"])
                 with td:
-                    st.code("\n".join(dep), language="bash")
+                    st.text_area("", "\n".join(dep), height=300, key=f"ta_{hash("\n".join(dep))}")
                 with tr:
-                    st.code("\n".join(rb), language="bash")
+                    st.text_area("", "\n".join(rb), height=300, key=f"ta_{hash("\n".join(rb))}")
 
                 reporte = (
                     f"CORE-NEXUS | {s['proyecto']}\nSwitch: {sw['host']} ({sw['vendor']})\n"
@@ -1344,7 +2347,7 @@ if st.session_state.vista_resumen:
 
     # ── Routers ──
     if s.get("routers"):
-        st.subheader("📡 Routers Configurados")
+        st.markdown('<div class="cn-section"><div class="cn-section-icon">📡</div><div><div class="cn-section-title">Routers Configurados</div></div></div>', unsafe_allow_html=True)
         for rt in s["routers"]:
             with st.expander(
                 f"📡 {rt['host']}  —  {rt['vendor']}  —  {rt['ipv4']}  —  {rt.get('ts','')}"
@@ -1354,22 +2357,20 @@ if st.session_state.vista_resumen:
                 rc2.markdown(f"**IPv4 LAN:** {rt['ipv4']}")
                 rc3.markdown(f"**HA:** {rt.get('modo_ha','—')}")
 
-                cmds_admin = cmds_vlan_admin(rt["vendor"], rt.get("vlan_admin",10),
-                                              rt.get("ip_admin","192.168.255.1"), rt["host"])
                 ipv6 = None if rt.get("ipv6","") in ("— (sin IPv6)", "") else rt.get("ipv6")
                 dep, rb = generar_config_router(
                     rt["vendor"], rt["ipv4"], ipv6, rt["host"],
                     rt.get("proto_v4","Ninguno"), rt.get("proto_v6","Ninguno"),
                     rt.get("as_number",65001), rt.get("bgp_neighbor",""), rt.get("bgp_neighbor_as",65002),
-                    rt.get("ospf_router_id","1.1.1.1"), cmds_admin,
+                    rt.get("ospf_router_id","1.1.1.1"), [],
                     rt.get("vlan_admin",10), rt.get("ip_admin","192.168.255.1"),
                     rt.get("modo_ha","Ninguno"), rt.get("ip_respaldo","0.0.0.0"), rt.get("es_activo",True)
                 )
                 td, tr = st.tabs(["📄 Deploy", "⏪ Rollback"])
                 with td:
-                    st.code("\n".join(dep), language="bash")
+                    st.text_area("", "\n".join(dep), height=300, key=f"ta_{hash("\n".join(dep))}")
                 with tr:
-                    st.code("\n".join(rb), language="bash")
+                    st.text_area("", "\n".join(rb), height=300, key=f"ta_{hash("\n".join(rb))}")
 
                 reporte = (
                     f"CORE-NEXUS | {s['proyecto']}\nRouter: {rt['host']} ({rt['vendor']})\n"
@@ -1386,7 +2387,7 @@ if st.session_state.vista_resumen:
 
     # ── Firewalls ──
     if s.get("firewalls"):
-        st.subheader("🔥 Firewalls Configurados")
+        st.markdown('<div class="cn-section"><div class="cn-section-icon">🔥</div><div><div class="cn-section-title">Firewalls Configurados</div></div></div>', unsafe_allow_html=True)
         for fw in s["firewalls"]:
             with st.expander(f"🔥 {fw['host']}  —  {fw['vendor']}  —  WAN: {fw['ip_wan']}  —  {fw.get('ts','')}"):
                 fc1, fc2 = st.columns(2)
@@ -1401,9 +2402,9 @@ if st.session_state.vista_resumen:
                 )
                 td, tr = st.tabs(["📄 Deploy", "⏪ Rollback"])
                 with td:
-                    st.code("\n".join(dep), language="bash")
+                    st.text_area("", "\n".join(dep), height=300, key=f"ta_{hash("\n".join(dep))}")
                 with tr:
-                    st.code("\n".join(rb), language="bash")
+                    st.text_area("", "\n".join(rb), height=300, key=f"ta_{hash("\n".join(rb))}")
 
                 reporte = (
                     f"CORE-NEXUS | {s['proyecto']}\nFirewall: {fw['host']} ({fw['vendor']})\n"
@@ -1420,7 +2421,7 @@ if st.session_state.vista_resumen:
 
     # ── Log de actividades ──
     if s.get("log"):
-        st.subheader("📜 Registro de Actividades")
+        st.markdown('<div class="cn-section"><div class="cn-section-icon">📜</div><div><div class="cn-section-title">Registro de Actividades</div></div></div>', unsafe_allow_html=True)
         df_log = pd.DataFrame(s["log"])
         df_log.columns = ["Timestamp", "Tipo", "Descripción"]
         st.dataframe(df_log, use_container_width=True, hide_index=True)
@@ -1444,8 +2445,18 @@ if st.session_state.vista_resumen:
 # INTERFAZ PRINCIPAL
 # =============================================================================
 
-st.title("🛡️ CORE-NEXUS: Enterprise Network Engine")
-st.caption("Sistema de Automatización de Redes e Infraestructura de Telecomunicaciones")
+st.markdown("""
+<div class="cn-page-header">
+    <div class="cn-logo">🛡️</div>
+    <div>
+        <h1 style="margin:0; font-size:1.25rem; color:#e2e8f0; font-weight:700; letter-spacing:-0.5px;">
+            CORE-NEXUS
+        </h1>
+        <div class="cn-subtitle">ENTERPRISE NETWORK ENGINE &nbsp;·&nbsp; AUTOMATION PLATFORM</div>
+    </div>
+    <div class="cn-version">v4.3</div>
+</div>
+""", unsafe_allow_html=True)
 
 # ── Barra de sesión + botón resumen ──
 _col_sesion, _col_import, _col_resumen = st.columns([3, 1, 1])
@@ -1474,7 +2485,12 @@ with _col_resumen:
 
 with _col_sesion:
     if st.session_state.sesion_activa is None:
-        st.info("📋 Sin sesión activa. Configura equipos y guárdalos en sesión.")
+        st.markdown("""
+        <div style="padding:8px 0;">
+            <span class="cn-session-pill inactive">
+                <span class="dot"></span> Sin sesión activa — configura equipos y guárdalos
+            </span>
+        </div>""", unsafe_allow_html=True)
     elif not st.session_state.sesion_confirmada:
         _s = st.session_state.sesion_activa
         st.warning(f"⚠️ Sesión detectada: **'{_s['proyecto']}'**. ¿Continuar?")
@@ -1491,16 +2507,28 @@ with _col_sesion:
         total_sw = len(_s.get("switches", []))
         total_rt = len(_s.get("routers", []))
         total_fw = len(_s.get("firewalls", []))
-        st.success(
-            f"📁 **'{_s['proyecto']}'** — "
-            f"{total_sw} switch(es) | {total_rt} router(es) | {total_fw} firewall(s)"
-        )
+        st.markdown(f"""
+        <div style="padding:8px 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+            <span class="cn-session-pill active">
+                <span class="dot"></span> {_s['proyecto']}
+            </span>
+            <span class="cn-chip cn-chip-cyan">{total_sw} SW</span>
+            <span class="cn-chip cn-chip-gray">{total_rt} RT</span>
+            <span class="cn-chip cn-chip-amber">{total_fw} FW</span>
+        </div>""", unsafe_allow_html=True)
 
 st.divider()
 
 # ── Sidebar ──
 with st.sidebar:
-    st.header("⚙️ Configuración Global")
+    st.markdown("""
+    <div style="padding:16px 0 4px 0;">
+        <div style="font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:700;
+                    letter-spacing:2px; color:#00d4ff; text-transform:uppercase; border-bottom:1px solid #1f2d45; padding-bottom:10px;">
+            ⚙ Configuración Global
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
     proyecto = st.text_input("Nombre del Proyecto", "FIBERTEC_OP_2026")
 
     if st.button("🗑️ Limpiar sesión", use_container_width=True):
@@ -1554,9 +2582,14 @@ with st.sidebar:
 # ── VLAN Administrativa global ──
 vlan_admin = VLAN_ID_MIN   # VLAN 10 para admin
 ip_admin   = f"{IP_BASE_1}.{IP_BASE_2}.{IP_ADMIN_OCTETO}.1"
-st.info(
-    f"🔒 **VLAN Administrativa Global**: VLAN {vlan_admin} — IP: {ip_admin} — SSH: `{SSH_USER}` / `{SSH_PASS}`"
-)
+st.markdown(f"""
+<div class="cn-info-bar">
+    <span class="cn-label">🔒 Admin</span>
+    VLAN&nbsp;<strong style="color:#e2e8f0;">{vlan_admin}</strong>
+    &nbsp;·&nbsp; IP&nbsp;<strong style="color:#00d4ff;">{ip_admin}</strong>
+    &nbsp;·&nbsp; SSH&nbsp;<code style="background:rgba(0,212,255,0.08); padding:1px 6px; border-radius:4px; font-size:11px;">{SSH_USER} / {SSH_PASS}</code>
+</div>
+""", unsafe_allow_html=True)
 
 st.divider()
 
@@ -1574,7 +2607,15 @@ tab_sw, tab_rt, tab_fw, tab_fmt = st.tabs([
 # =============================================================================
 
 with tab_sw:
-    st.subheader("🖧 Configuración de Switches")
+    st.markdown("""
+    <div class="cn-section">
+        <div class="cn-section-icon">🖧</div>
+        <div>
+            <div class="cn-section-title">Configuración de Switches</div>
+            <div class="cn-section-sub">VLANs independientes · DHCP automático · Alta disponibilidad</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # ── Parámetros de switches ──
     sw_col1, sw_col2, sw_col3 = st.columns(3)
@@ -1585,8 +2626,17 @@ with tab_sw:
     st.divider()
 
     # ── Configuración de VLANs — INDEPENDIENTE del número de switches ──
-    st.markdown("### 🌐 VLANs a configurar en los switches")
-    st.caption("Define las VLANs que se aplicarán a TODOS los switches. Puedes tener más o menos VLANs que switches.")
+    st.markdown("""
+    <div style="margin:16px 0 6px 0;">
+        <span style="font-family:'DM Sans',sans-serif; font-size:11px; font-weight:700;
+                     text-transform:uppercase; letter-spacing:1.5px; color:#00d4ff;">
+            🌐 VLANs a configurar
+        </span>
+        <span style="font-family:'JetBrains Mono',monospace; font-size:11px; color:#4a5a72; margin-left:10px;">
+            — independientes del número de switches
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
 
     sw_vl_col1, sw_vl_col2 = st.columns([1, 3])
     num_vlans_sw = sw_vl_col1.number_input(
@@ -1598,7 +2648,12 @@ with tab_sw:
     vlans_sw_config = []
     vlan_ini_sw = sw_vl_col2.number_input("VLAN inicial", VLAN_ID_MIN + 1, VLAN_ID_MAX, 11, key="vlan_ini_sw")
 
-    st.markdown("**Detalle de VLANs:**")
+    st.markdown("""
+    <div style="margin:10px 0 4px 0; font-family:'DM Sans',sans-serif; font-size:11px;
+                font-weight:600; letter-spacing:0.8px; color:#8ba0bc; text-transform:uppercase;">
+        Nombres de VLAN
+    </div>
+    """, unsafe_allow_html=True)
     vl_cols = st.columns(min(int(num_vlans_sw), 4))
     for i in range(int(num_vlans_sw)):
         vlan_id  = int(vlan_ini_sw) + i
@@ -1627,8 +2682,14 @@ with tab_sw:
 
     st.divider()
 
-    # ── Tabla de switches ──
-    st.markdown("### 🖧 Switches a configurar")
+    st.markdown("""
+    <div style="margin:16px 0 6px 0;">
+        <span style="font-family:'DM Sans',sans-serif; font-size:11px; font-weight:700;
+                     text-transform:uppercase; letter-spacing:1.5px; color:#00d4ff;">
+            🖧 Switches a configurar
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
     switches_list = []
     sw_m_cols = st.columns(min(int(num_sw), 4))
     for i in range(int(num_sw)):
@@ -1638,10 +2699,10 @@ with tab_sw:
             st.metric(host_sw, f"{len(vlans_sw_config)} VLAN(s)", f"VLAN {vlans_sw_config[0]['vlan']}–{vlans_sw_config[-1]['vlan']}")
 
     # ── Descarga masiva ──
-    cmds_admin_sw = cmds_vlan_admin(vendor_sw, vlan_admin, ip_admin, host_base_sw + "-MGMT")
     lineas_all_sw = [f"CORE-NEXUS | {proyecto} | SWITCHES", "=" * 60, ""]
 
     for sw in switches_list:
+        cmds_admin_sw = cmds_vlan_admin(vendor_sw, vlan_admin, ip_admin, sw["host"])
         dep, rb = generar_config_switch(
             vendor_sw, sw["host"], vlans_sw_config,
             proto_v4, proto_v6, as_number, bgp_neighbor, bgp_neighbor_as,
@@ -1671,6 +2732,7 @@ with tab_sw:
 
     # ── Expander individual por switch ──
     for sw in switches_list:
+        cmds_admin_sw = cmds_vlan_admin(vendor_sw, vlan_admin, ip_admin, sw["host"])
         dep, rb = generar_config_switch(
             vendor_sw, sw["host"], vlans_sw_config,
             proto_v4, proto_v6, as_number, bgp_neighbor, bgp_neighbor_as,
@@ -1692,10 +2754,10 @@ with tab_sw:
         ):
             td, tr = st.tabs(["📄 Deploy", "⏪ Rollback"])
             with td:
-                st.code(deploy_txt, language="bash")
+                st.text_area("", deploy_txt, height=300, key=f"ta_{hash(deploy_txt)}")
             with tr:
                 st.warning("Ejecutar solo para revertir cambios.")
-                st.code(rollback_txt, language="bash")
+                st.text_area("", rollback_txt, height=300, key=f"ta_{hash(rollback_txt)}")
             st.download_button(
                 f"💾 Descargar — {sw['host']}",
                 data=reporte_sw,
@@ -1754,8 +2816,21 @@ with tab_sw:
 # =============================================================================
 
 with tab_rt:
-    st.subheader("📡 Configuración de Routers")
-    st.info("Los routers usan interfaces físicas LAN/WAN, sin VLANs propias. Cada router tiene su propia IP LAN.")
+    st.markdown("""
+    <div class="cn-section">
+        <div class="cn-section-icon">📡</div>
+        <div>
+            <div class="cn-section-title">Configuración de Routers</div>
+            <div class="cn-section-sub">Interfaces físicas LAN/WAN · Sin VLANs · Routing dinámico</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown("""
+    <div class="cn-info-bar">
+        <span class="cn-label">ℹ️ Nota</span>
+        Los routers usan interfaces físicas LAN/WAN. Sin VLANs propias. Cada router tiene su propia IP LAN independiente.
+    </div>
+    """, unsafe_allow_html=True)
 
     # ── Parámetros de routers ──
     rt_col1, rt_col2, rt_col3 = st.columns(3)
@@ -1771,8 +2846,14 @@ with tab_rt:
 
     st.divider()
 
-    # ── Tabla de routers con IPs calculadas ──
-    st.markdown("### 📡 Routers a configurar")
+    st.markdown("""
+    <div style="margin:16px 0 6px 0;">
+        <span style="font-family:'DM Sans',sans-serif; font-size:11px; font-weight:700;
+                     text-transform:uppercase; letter-spacing:1.5px; color:#00d4ff;">
+            📡 Routers a configurar
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
     routers_list = []
     rt_m_cols = st.columns(min(int(num_rt), 4))
     for i in range(int(num_rt)):
@@ -1794,7 +2875,6 @@ with tab_rt:
     st.divider()
 
     # ── Descarga masiva ──
-    cmds_admin_rt = cmds_vlan_admin(vendor_rt, vlan_admin, ip_admin, host_base_rt + "-MGMT")
     lineas_all_rt = [f"CORE-NEXUS | {proyecto} | ROUTERS", "=" * 60, ""]
 
     for rt in routers_list:
@@ -1802,7 +2882,7 @@ with tab_rt:
         dep, rb = generar_config_router(
             vendor_rt, rt["ipv4"], ipv6_real, rt["host"],
             proto_v4, proto_v6, as_number, bgp_neighbor, bgp_neighbor_as,
-            ospf_router_id, cmds_admin_rt, vlan_admin, ip_admin,
+            ospf_router_id, [], vlan_admin, ip_admin,
             modo_ha, ip_respaldo, es_activo
         )
         lineas_all_rt += [
@@ -1832,7 +2912,7 @@ with tab_rt:
         dep, rb = generar_config_router(
             vendor_rt, rt["ipv4"], ipv6_real, rt["host"],
             proto_v4, proto_v6, as_number, bgp_neighbor, bgp_neighbor_as,
-            ospf_router_id, cmds_admin_rt, vlan_admin, ip_admin,
+            ospf_router_id, [], vlan_admin, ip_admin,
             modo_ha, ip_respaldo, es_activo
         )
         deploy_txt   = "\n".join(dep)
@@ -1851,10 +2931,10 @@ with tab_rt:
         ):
             td, tr = st.tabs(["📄 Deploy", "⏪ Rollback"])
             with td:
-                st.code(deploy_txt, language="bash")
+                st.text_area("", deploy_txt, height=300, key=f"ta_{hash(deploy_txt)}")
             with tr:
                 st.warning("Ejecutar solo para revertir cambios.")
-                st.code(rollback_txt, language="bash")
+                st.text_area("", rollback_txt, height=300, key=f"ta_{hash(rollback_txt)}")
             st.download_button(
                 f"💾 Descargar — {rt['host']}",
                 data=reporte_rt,
@@ -1902,8 +2982,21 @@ with tab_rt:
 # =============================================================================
 
 with tab_fw:
-    st.subheader("🔥 Configuración de Firewall")
-    st.info("Sección independiente de switches y routers. Puedes elegir un fabricante diferente.")
+    st.markdown("""
+    <div class="cn-section">
+        <div class="cn-section-icon">🔥</div>
+        <div>
+            <div class="cn-section-title">Configuración de Firewall</div>
+            <div class="cn-section-sub">NAT/PAT automático · Políticas de acceso · Multi-vendor</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown("""
+    <div class="cn-info-bar">
+        <span class="cn-label">ℹ️ Nota</span>
+        Sección independiente de switches y routers. Puedes elegir un fabricante diferente al del resto de la red.
+    </div>
+    """, unsafe_allow_html=True)
 
     fw_col1, fw_col2, fw_col3 = st.columns(3)
     vendor_fw = fw_col1.selectbox("Fabricante Firewall", ["Cisco ASA", "Huawei USG", "Fortinet FGT"], key="vendor_fw")
@@ -1912,13 +3005,49 @@ with tab_fw:
 
     fw_col4, fw_col5 = st.columns(2)
     ip_lan_fw = fw_col4.text_input("IP interfaz LAN", f"{IP_BASE_1}.{IP_BASE_2}.0.254", key="ip_lan_fw")
-    ipv6_fw   = generar_ipv6(ip_lan_fw, modo_ipv6)
-    fw_col5.text_input(
-        "IPv6 LAN (calculado)", ipv6_fw if ipv6_fw else "— (sin IPv6)",
-        disabled=True, key="ipv6_fw_display"
-    )
 
-    st.markdown("**Protocolos de enrutamiento del Firewall**")
+    # ── IPv6 en Firewall: opcional con explicación clara ──
+    usar_ipv6_fw = fw_col5.checkbox(
+        "Habilitar IPv6 en LAN del firewall",
+        value=False,
+        key="usar_ipv6_fw",
+        help=(
+            "Si activas esta opción, se generará una dirección IPv6 automáticamente "
+            "a partir de la IP LAN IPv4.\n\n"
+            "Ejemplo: 192.168.0.254 → fd00:A8:00::FE/64\n"
+            "  • 'A8' = 168 (segundo octeto) en hex\n"
+            "  • '00' = 0 (tercer octeto) en hex\n"
+            "  • 'FE' = 254 (cuarto octeto) en hex\n\n"
+            "Requiere que el modo IPv6 en el sidebar NO sea 'Sin IPv6'."
+        )
+    )
+    ipv6_fw = None
+    if usar_ipv6_fw and not modo_ipv6.startswith("Sin"):
+        ipv6_fw = generar_ipv6(ip_lan_fw, modo_ipv6)
+        if ipv6_fw:
+            st.markdown(f"""
+            <div class="cn-info-bar">
+                <span class="cn-label">IPv6</span>
+                Dirección calculada: <strong style="color:#00d4ff;">{ipv6_fw}</strong>
+                &nbsp;·&nbsp; Octetos de {ip_lan_fw} convertidos a hexadecimal
+            </div>
+            """, unsafe_allow_html=True)
+    elif usar_ipv6_fw and modo_ipv6.startswith("Sin"):
+        st.markdown("""
+        <div class="cn-info-bar" style="border-left-color:#f59e0b; background:rgba(245,158,11,0.05);">
+            <span class="cn-label" style="color:#f59e0b;">⚠ Aviso</span>
+            Cambia el Modo IPv6 en el sidebar a ULA o Link-Local para habilitar IPv6.
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div style="margin:16px 0 6px 0;">
+        <span style="font-family:'DM Sans',sans-serif; font-size:11px; font-weight:700;
+                     text-transform:uppercase; letter-spacing:1.5px; color:#00d4ff;">
+            🔀 Protocolos de enrutamiento
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
     fw_pc1, fw_pc2 = st.columns(2)
     fw_proto_v4 = fw_pc1.selectbox("IPv4 Firewall", PROTOCOLOS_IPV4, key="fw_pv4")
     fw_proto_v6 = fw_pc2.selectbox("IPv6 Firewall", PROTOCOLOS_IPV6,
@@ -1962,10 +3091,10 @@ with tab_fw:
 
     tfw_dep, tfw_rb = st.tabs(["📄 Deploy Firewall", "⏪ Rollback Firewall"])
     with tfw_dep:
-        st.code(fw_deploy_txt, language="bash")
+        st.text_area("", fw_deploy_txt, height=300, key=f"ta_{hash(fw_deploy_txt)}")
     with tfw_rb:
         st.warning("Ejecutar solo para revertir la configuración del firewall.")
-        st.code(fw_rollback_txt, language="bash")
+        st.text_area("", fw_rollback_txt, height=300, key=f"ta_{hash(fw_rollback_txt)}")
 
     st.divider()
 
@@ -2000,41 +3129,52 @@ with tab_fw:
 # =============================================================================
 
 with tab_fmt:
-    st.subheader("🔧 Formateo Previo al Deploy")
-    st.warning(
-        "**Ejecutar ANTES del script de deploy.** "
-        "Limpia configuraciones anteriores para evitar conflictos."
-    )
+    st.markdown("""
+    <div class="cn-section">
+        <div class="cn-section-icon">🔧</div>
+        <div>
+            <div class="cn-section-title">Formateo Previo al Deploy</div>
+            <div class="cn-section-sub">Limpieza selectiva · Reset completo · Factory reset</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown("""
+    <div class="cn-info-bar" style="border-left-color: #f59e0b; background: rgba(245,158,11,0.05);">
+        <span class="cn-label" style="color:#f59e0b;">⚠ Orden</span>
+        Ejecutar <strong>ANTES</strong> del script de deploy. Limpia configuraciones anteriores para evitar conflictos.
+    </div>
+    """, unsafe_allow_html=True)
 
-    CARD_STYLE = "border-radius:10px; padding:16px 18px; height:100%; font-size:14px; line-height:1.6;"
     fc1, fc2, fc3 = st.columns(3)
     with fc1:
-        st.markdown(
-            f'<div style="{CARD_STYLE} background:#e8f4fd; border:1.5px solid #2196f3; color:#0d2137;">'
-            '<strong style="font-size:15px; color:#0d47a1;">🔵 1. Limpieza Selectiva</strong><br><br>'
-            'Borra <strong>solo lo que este proyecto reconfigura</strong>.<br><br>'
-            'Conserva SSH, hostname y puertos físicos.<br><br>'
-            '<span style="color:#1b5e20; font-weight:500;">✅ Equipo en producción parcializado.</span>'
-            '</div>', unsafe_allow_html=True
-        )
+        st.markdown("""
+        <div class="cn-fmt-card cn-fmt-blue">
+            <div class="cn-fmt-title" style="color:#60c8ff;">🔵 Limpieza Selectiva</div>
+            <div class="cn-fmt-body">
+                Elimina <strong>solo los elementos de este proyecto</strong>: VLANs, DHCP, routing y HA.<br><br>
+                Conserva SSH, hostname y puertos físicos intactos.
+            </div>
+            <div class="cn-fmt-warn" style="color:#10b981;">✅ Ideal para equipos en producción.</div>
+        </div>""", unsafe_allow_html=True)
     with fc2:
-        st.markdown(
-            f'<div style="{CARD_STYLE} background:#fff8e1; border:1.5px solid #ff9800; color:#3e2000;">'
-            '<strong style="font-size:15px; color:#e65100;">🟠 2. Reset Completo</strong><br><br>'
-            'Borra <strong>toda la configuración lógica</strong>.<br><br>'
-            'Preserva la conectividad de gestión.<br><br>'
-            '<span style="color:#bf360c; font-weight:500;">⚠️ Equipo reutilizado completamente.</span>'
-            '</div>', unsafe_allow_html=True
-        )
+        st.markdown("""
+        <div class="cn-fmt-card cn-fmt-amber">
+            <div class="cn-fmt-title" style="color:#f59e0b;">🟠 Reset Completo</div>
+            <div class="cn-fmt-body">
+                Borra <strong>toda la configuración lógica</strong>: VLANs, routing, ACLs, NAT, HA.<br><br>
+                Preserva la conectividad de gestión.
+            </div>
+            <div class="cn-fmt-warn" style="color:#f59e0b;">⚠️ Para equipos reutilizados completamente.</div>
+        </div>""", unsafe_allow_html=True)
     with fc3:
-        st.markdown(
-            f'<div style="{CARD_STYLE} background:#fdecea; border:1.5px solid #f44336; color:#3b0000;">'
-            '<strong style="font-size:15px; color:#b71c1c;">🔴 3. Reset de Fábrica</strong><br><br>'
-            'Devuelve al <strong>estado de fábrica completo</strong>.<br><br>'
-            'Se pierde TODO el acceso remoto.<br><br>'
-            '<span style="color:#7f0000; font-weight:600;">🔴 Requiere consola física.</span>'
-            '</div>', unsafe_allow_html=True
-        )
+        st.markdown("""
+        <div class="cn-fmt-card cn-fmt-red">
+            <div class="cn-fmt-title" style="color:#ef4444;">🔴 Reset de Fábrica</div>
+            <div class="cn-fmt-body">
+                Devuelve al <strong>estado de fábrica</strong>. Se pierde TODO el acceso remoto hasta aplicar el deploy.
+            </div>
+            <div class="cn-fmt-warn" style="color:#ef4444;">🔴 Requiere consola física. Aplicar deploy inmediatamente.</div>
+        </div>""", unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
     st.divider()
 
@@ -2107,7 +3247,7 @@ with tab_fmt:
                 st.warning(f"{len(fmt_cmds)} comandos")
             else:
                 st.error(f"{len(fmt_cmds)} comandos")
-            st.code(fmt_txt, language="bash")
+            st.text_area("", fmt_txt, height=300, key=f"ta_{hash(fmt_txt)}")
             st.download_button(
                 f"💾 Descargar — {eq['host']}",
                 data=reporte_fmt,
