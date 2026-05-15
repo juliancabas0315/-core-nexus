@@ -35,7 +35,7 @@ y alta disponibilidad.
 ### Instalación
 
 ```bash
-git clone https://github.com/TU-USUARIO/core-nexus.git
+git clone https://github.com/juliancabas0315/-core-nexus.git
 cd core-nexus
 pip install -r requirements.txt
 ```
