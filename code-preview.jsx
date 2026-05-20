@@ -51,6 +51,30 @@ function tokenizeLine(line) {
 function CodePreview({ deploy, rollback, hostname }) {
   const [tab, setTab] = useStateCP("deploy");
   const lines = (tab === "deploy" ? deploy : rollback).split("\n");
+  const [copyMsg, setCopyMsg] = useStateCP("");
+
+  const handleCopy = async () => {
+    const content = tab === "deploy" ? deploy : rollback;
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopyMsg("✓ copiado");
+      setTimeout(() => setCopyMsg(""), 1500);
+    } catch {
+      setCopyMsg("error");
+      setTimeout(() => setCopyMsg(""), 1500);
+    }
+  };
+
+  const handleDownload = () => {
+    const content = tab === "deploy" ? deploy : rollback;
+    const suffix  = tab === "deploy" ? "deploy" : "rollback";
+    const blob = new Blob([content], { type: "text/plain" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${hostname || "config"}_${suffix}.cfg`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
 
   return (
     <div className="panel" style={{marginBottom: 0}}>
@@ -66,8 +90,12 @@ function CodePreview({ deploy, rollback, hostname }) {
           <span className="lines">{rollback.split("\n").length} líneas</span>
         </div>
         <div className="spacer"></div>
-        <div className="code-action">{Icons.Copy}<span>Copiar</span></div>
-        <div className="code-action">{Icons.Download}<span>{hostname}.cfg</span></div>
+        <div className="code-action" onClick={handleCopy} style={{cursor:'pointer'}}>
+          {Icons.Copy}<span>{copyMsg || "Copiar"}</span>
+        </div>
+        <div className="code-action" onClick={handleDownload} style={{cursor:'pointer'}}>
+          {Icons.Download}<span>{hostname}.cfg</span>
+        </div>
       </div>
       <div className="code-block">
         {lines.map((line, i) => (
