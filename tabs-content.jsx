@@ -322,9 +322,7 @@ function SwitchesTab({ globalState, onSave }) {
                 <h2>Equipos generados</h2>
                 <span className="desc">selecciona uno para previsualizar su CLI</span>
               </div>
-              <div style={{display:'flex', gap:6}}>
-                <button className="btn ghost">{Icons.Download}<span>Descargar todos</span></button>
-              </div>
+              <div style={{display:'flex', gap:6}}></div>
             </div>
             <div className="panel-body">
               <div className="device-grid">
@@ -626,7 +624,6 @@ function RoutersTab({ globalState, onSave }) {
       <div className="panel">
         <div className="panel-head">
           <div className="title"><h2>Equipos generados</h2><span className="desc">{numRt} routers · selecciona uno para previsualizar su CLI</span></div>
-          <button className="btn ghost">{Icons.Download}<span>Descargar todos</span></button>
         </div>
         <div className="panel-body">
           <div className="device-grid">

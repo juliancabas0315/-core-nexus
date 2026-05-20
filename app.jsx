@@ -17,6 +17,7 @@ const ACCENT_MAP = {
 
 function App() {
   const [tweaks, setTweak] = useTweaks(TWEAK_DEFAULTS);
+  const importRef = React.useRef(null);
 
   const [tab, setTab] = useState("switches");
   const [showResumen, setShowResumen] = useState(false);
@@ -46,6 +47,27 @@ function App() {
     } catch (e) {
       alert(`Error al guardar: ${e.message}`);
     }
+  };
+
+  const loadSession = (data) => {
+    setSessionData({
+      proyecto: data.proyecto || sessionData.proyecto,
+      creada:   data.creada   || sessionData.creada,
+      switches: data.switches || [],
+      routers:  data.routers  || [],
+      firewalls:data.firewalls|| [],
+      vlans_globales: data.vlans_globales || [],
+      log: data.log || [],
+    });
+    alert(`Sesión "${data.proyecto || "(sin nombre)"}" cargada · ${(data.switches||[]).length}sw ${(data.routers||[]).length}rt ${(data.firewalls||[]).length}fw`);
+  };
+
+  const clearSession = () => {
+    setSessionData({
+      proyecto: sessionData.proyecto,
+      creada: new Date().toISOString().slice(0,16).replace("T", " "),
+      switches: [], routers: [], firewalls: [], vlans_globales: [], log: [],
+    });
   };
   const [globalState, setGlobalState] = useState({
     project: "FIBERTEC_OP_2026",
@@ -105,7 +127,22 @@ function App() {
             <span className="proj">{sessionData.proyecto}</span>
             <span className="count">· {sessionData.switches.length}sw {sessionData.routers.length}rt {sessionData.firewalls.length}fw</span>
           </div>
-          <button className="btn ghost">{Icons.Upload}<span>Importar</span></button>
+          <input ref={importRef} type="file" accept=".json,application/json"
+                 style={{display:'none'}}
+                 onChange={(e) => {
+                   const f = e.target.files?.[0];
+                   if (!f) return;
+                   const r = new FileReader();
+                   r.onload = () => {
+                     try { loadSession(JSON.parse(r.result)); }
+                     catch (err) { alert("JSON inválido: " + err.message); }
+                   };
+                   r.readAsText(f);
+                   e.target.value = "";
+                 }}/>
+          <button className="btn ghost" onClick={() => importRef.current?.click()}>
+            {Icons.Upload}<span>Importar</span>
+          </button>
           <button className="btn ghost" onClick={() => setShowResumen(true)}>{Icons.Eye}<span>Resumen</span></button>
           <button className="btn ghost icon-only" title={tweaks.theme === "dark" ? "Cambiar a modo claro" : "Cambiar a modo oscuro"}
                   onClick={() => setTweak("theme", tweaks.theme === "dark" ? "light" : "dark")}>
@@ -115,7 +152,8 @@ function App() {
         </div>
       </div>
 
-      <Sidebar state={globalState} setState={setGlobalState}/>
+      <Sidebar state={globalState} setState={setGlobalState}
+               onLoadSession={loadSession} onClearSession={clearSession}/>
 
       <main className="main">
         <div className="main-inner">

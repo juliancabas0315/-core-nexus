@@ -19,8 +19,8 @@ VLAN_ID_MAX   = 4094
 SEGMENTOS_MAX = 50
 DNS_PRIMARIO  = "8.8.8.8"
 SUBNET_MASK   = "255.255.255.0"
-SSH_USER      = "admin"
-SSH_PASS      = "admin"
+SSH_USER      = "ntxadmin"           # ≥6 chars — requerido por Huawei VRP
+SSH_PASS      = "NtxAdmin2026"       # ≥12 chars + mixto — pasa policy de todos los vendors
 IP_ADMIN_OCTETO = "255"
 
 HSRP_PRIORIDAD_ACTIVO  = 110
@@ -313,16 +313,25 @@ def cmds_vlan_admin(vendor, vlan_admin, ip_admin, host):
     elif vendor == "Huawei":
         cmds += [
             "system-view", f"sysname {host}",
-            f"vlan {vlan_admin}", " description VLAN_ADMIN_MGMT", " quit",
+            f"vlan {vlan_admin}", f" description VLAN_ADMIN_MGMT", " quit",
             f"interface Vlanif{vlan_admin}",
             f" ip address {ip_admin} {SUBNET_MASK}", " quit",
-            "rsa local-key-pair create", "2048", "y", "stelnet server enable",
+            "# ── Generación de llaves RSA (interactivo) ──",
+            "# Ejecute: rsa local-key-pair create",
+            "# - Presione ENTER para aceptar tamaño 3072 (no use 2048: VRP moderno lo rechaza)",
+            "# - Responda 'y' para confirmar reemplazo si existe",
+            "rsa local-key-pair create",
+            "stelnet server enable",
             "aaa",
             f" local-user {SSH_USER} password irreversible-cipher {SSH_PASS}",
             f" local-user {SSH_USER} service-type ssh",
-            f" local-user {SSH_USER} privilege level 15", " quit",
-            "user-interface vty 0 4", " authentication-mode aaa",
-            " protocol inbound ssh", " idle-timeout 10 0", " quit",
+            f" local-user {SSH_USER} privilege level 3",     # max user-level real en VRP = 3
+            " quit",
+            "user-interface vty 0 4",
+            " authentication-mode aaa",
+            " protocol inbound ssh",
+            " idle-timeout 10 0",
+            " quit",
         ]
     elif vendor == "Fortinet":
         cmds += [
@@ -355,13 +364,19 @@ def cmds_ssh_router(vendor, host):
     if vendor == "Huawei":
         return [
             "system-view", f"sysname {host}",
-            "rsa local-key-pair create", "2048", "y", "stelnet server enable",
+            "# ── RSA interactivo: ENTER para 3072, 'y' para confirmar ──",
+            "rsa local-key-pair create",
+            "stelnet server enable",
             "aaa",
             f" local-user {SSH_USER} password irreversible-cipher {SSH_PASS}",
             f" local-user {SSH_USER} service-type ssh",
-            f" local-user {SSH_USER} privilege level 15", " quit",
-            "user-interface vty 0 4", " authentication-mode aaa",
-            " protocol inbound ssh", " idle-timeout 10 0", " quit",
+            f" local-user {SSH_USER} privilege level 3",
+            " quit",
+            "user-interface vty 0 4",
+            " authentication-mode aaa",
+            " protocol inbound ssh",
+            " idle-timeout 10 0",
+            " quit",
         ]
     if vendor == "Fortinet":
         return [
@@ -429,11 +444,13 @@ def generar_config_switch(vendor, host, vlans_config,
                "end", "write memory"]
 
     elif vendor == "Huawei":
-        dep += ["system-view", f"sysname {host}"]
+        # cmds_admin_precalc ya incluye system-view + sysname.
+        # NO los duplicar aquí — eso era el bug que producía
+        #   "system-view ^ Error: Unrecognized command".
+        dep += cmds_admin_precalc
+        dep.append("dhcp enable")
         if any(vc.get("ipv6") for vc in vlans_config):
             dep.append("ipv6")
-        dep.append("dhcp enable")
-        dep += cmds_admin_precalc
         for vc in vlans_config:
             dep += [
                 f"vlan {vc['vlan']}", f" description {vc['name']}", " quit",
@@ -441,7 +458,10 @@ def generar_config_switch(vendor, host, vlans_config,
                 f" ip address {vc['ipv4']} {SUBNET_MASK}",
             ]
             if vc.get("ipv6"):
-                dep.append(f" ipv6 address {vc['ipv6'].replace('/64', ' 64')}")
+                # Por interfaz también se requiere habilitar IPv6 ANTES de asignar la dirección
+                dep.append(" ipv6 enable")
+                ipv6_clean = vc["ipv6"].replace("/64", "")
+                dep.append(f" ipv6 address {ipv6_clean} 64")
             dep += [" dhcp select interface", " quit"]
             dep += cmds_routing_ipv4(vendor, proto_v4, vc["ipv4"], as_number,
                                      bgp_neighbor, bgp_neighbor_as, vc["vlan"])

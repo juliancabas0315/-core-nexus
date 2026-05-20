@@ -10,13 +10,36 @@ function Field({ label, hint, hintTone, children }) {
   );
 }
 
-function Sidebar({ state, setState }) {
+function Sidebar({ state, setState, onLoadSession, onClearSession }) {
   const ipv6Modes = [
     { value: "ula", label: "ULA · fd00::/8 (Recomendado)", hint: "Enrutable entre VLANs", tone: "ok" },
     { value: "ll",  label: "Link-Local · fe80::",         hint: "Solo dentro del mismo segmento", tone: "warn" },
     { value: "off", label: "Sin IPv6 · Solo IPv4",        hint: "IPv6 desactivado", tone: null },
   ];
   const ipv6Sel = ipv6Modes.find(m => m.value === state.ipv6Mode);
+  const fileRef = React.useRef(null);
+
+  const handleLoad = (e) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        onLoadSession && onLoadSession(data);
+      } catch (err) {
+        alert("Archivo JSON inválido: " + err.message);
+      }
+    };
+    reader.readAsText(f);
+    e.target.value = "";          // permite re-cargar el mismo archivo
+  };
+
+  const handleClear = () => {
+    if (confirm("¿Vaciar la sesión actual? Esta acción no se puede deshacer.")) {
+      onClearSession && onClearSession();
+    }
+  };
 
   return (
     <aside className="sidebar">
@@ -26,8 +49,14 @@ function Sidebar({ state, setState }) {
           <input className="field" value={state.project} onChange={e => setState({...state, project: e.target.value})}/>
         </Field>
         <div style={{display:'flex', gap:6, marginTop: 10}}>
-          <button className="btn ghost" style={{flex:1}}>{Icons.Folder}<span>Cargar</span></button>
-          <button className="btn ghost" style={{flex:1}}>{Icons.Reset}<span>Limpiar</span></button>
+          <input ref={fileRef} type="file" accept=".json,application/json"
+                 style={{display:'none'}} onChange={handleLoad}/>
+          <button className="btn ghost" style={{flex:1}} onClick={() => fileRef.current?.click()}>
+            {Icons.Folder}<span>Cargar</span>
+          </button>
+          <button className="btn ghost" style={{flex:1}} onClick={handleClear}>
+            {Icons.Reset}<span>Limpiar</span>
+          </button>
         </div>
       </div>
 
@@ -100,9 +129,12 @@ function Sidebar({ state, setState }) {
       <div className="side-group">
         <div className="side-title">Credenciales por Defecto</div>
         <div className="creds">
-          <div className="line"><span className="k">SSH</span><span className="v">admin / admin</span></div>
+          <div className="line"><span className="k">SSH</span><span className="v">ntxadmin / NtxAdmin2026</span></div>
           <div className="line"><span className="k">BASE</span><span className="v">192.168.x.1</span></div>
           <div className="line"><span className="k">MGMT</span><span className="v">192.168.255.1 · VLAN 10</span></div>
+        </div>
+        <div className="field-hint" style={{marginTop: 8, lineHeight: 1.5}}>
+          Cumple política Huawei (≥6 chars usuario, ≥8 mixto password).
         </div>
       </div>
     </aside>
